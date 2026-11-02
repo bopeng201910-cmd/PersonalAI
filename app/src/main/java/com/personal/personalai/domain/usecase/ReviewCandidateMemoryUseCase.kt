@@ -1,34 +1,33 @@
 package com.personal.personalai.domain.usecase
 
 import com.personal.personalai.domain.model.CandidateStatus
-import com.personal.personalai.domain.model.Memory
 import com.personal.personalai.domain.repository.CandidateMemoryRepository
-import com.personal.personalai.domain.repository.MemoryRepository
 import javax.inject.Inject
 
+data class BatchApprovalResult(
+    val succeededCount: Int,
+    val failedCount: Int,
+    val failedIds: List<Long>
+)
+
 class ReviewCandidateMemoryUseCase @Inject constructor(
-    private val candidateMemoryRepository: CandidateMemoryRepository,
-    private val memoryRepository: MemoryRepository
+    private val candidateMemoryRepository: CandidateMemoryRepository
 ) {
     /**
-     * Approves and writes candidate memory to official memories table.
+     * Approves and writes candidate memory to official memories table in a single atomic transaction.
+     * Only candidates in PENDING status can be approved.
+     * Duplicate calls on already approved items return success without duplicating official memory.
      */
-    suspend fun approveCandidate(candidateId: Long, customContent: String? = null, customTopic: String? = null) {
-        val candidate = candidateMemoryRepository.getById(candidateId) ?: return
-        val finalContent = customContent?.trim()?.ifBlank { candidate.content } ?: candidate.content
-        val finalTopic = customTopic?.trim() ?: candidate.topic
-
-        // 1. Save to official memories table
-        memoryRepository.saveMemory(
-            Memory(
-                content = finalContent,
-                topic = finalTopic,
-                createdAt = candidate.sourceTimestamp.takeIf { it > 0 } ?: System.currentTimeMillis()
-            )
+    suspend fun approveCandidate(
+        candidateId: Long,
+        customContent: String? = null,
+        customTopic: String? = null
+    ): Result<Boolean> {
+        return candidateMemoryRepository.approveCandidateInTransaction(
+            candidateId = candidateId,
+            customContent = customContent,
+            customTopic = customTopic
         )
-
-        // 2. Mark candidate as APPROVED
-        candidateMemoryRepository.updateStatus(candidateId, CandidateStatus.APPROVED)
     }
 
     /**
@@ -47,10 +46,27 @@ class ReviewCandidateMemoryUseCase @Inject constructor(
 
     /**
      * Bulk approves all candidates with their current contents.
+     * Correctly captures individual failures and returns detailed batch result.
      */
-    suspend fun approveAll(candidateIds: List<Long>) {
-        candidateIds.forEach { id ->
-            approveCandidate(id)
+    suspend fun approveAll(candidateIds: List<Long>): BatchApprovalResult {
+        var success = 0
+        var fail = 0
+        val failedIds = mutableListOf<Long>()
+
+        for (id in candidateIds) {
+            val res = approveCandidate(id)
+            if (res.isSuccess && res.getOrNull() == true) {
+                success++
+            } else {
+                fail++
+                failedIds.add(id)
+            }
         }
+
+        return BatchApprovalResult(
+            succeededCount = success,
+            failedCount = fail,
+            failedIds = failedIds
+        )
     }
 }

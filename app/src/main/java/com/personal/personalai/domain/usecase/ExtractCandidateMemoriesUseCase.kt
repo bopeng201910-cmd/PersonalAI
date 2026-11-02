@@ -91,25 +91,44 @@ class ExtractCandidateMemoriesUseCase @Inject constructor(
             })
         }
 
-        val response = aiRepository.sendMessageWithTools(
+        val aiResult = aiRepository.sendMessageWithTools(
             conversationItems = conversationItems,
             memories = emptyList(),
             tools = emptyList(),
             previousResponseId = null
-        ).getOrThrow()
+        )
+
+        val response = aiResult.getOrThrow()
 
         val text = when (response) {
             is AgentResponse.Text -> response.text
             is AgentResponse.ToolCalls -> ""
         }
 
-        val candidates = parseCandidatesJson(text, newMessages.first().id, newMessages.last().timestamp)
+        // Strictly distinguish valid JSON (including empty array []) vs JSON parse errors
+        val candidates = parseCandidatesJsonStrict(
+            text,
+            newMessages.first().id,
+            newMessages.last().timestamp
+        ).getOrThrow()
 
         if (candidates.isNotEmpty()) {
-            candidateMemoryRepository.saveCandidates(candidates)
+            // Deduplicate against existing candidate records from the same messages
+            val messageIds = newMessages.map { it.id }
+            val existing = candidateMemoryRepository.getBySourceMessageIds(messageIds)
+            val toInsert = candidates.filter { candidate ->
+                existing.none { exist ->
+                    exist.sourceMessageId == candidate.sourceMessageId &&
+                    exist.content.trim().equals(candidate.content.trim(), ignoreCase = true)
+                }
+            }
+
+            if (toInsert.isNotEmpty()) {
+                candidateMemoryRepository.saveCandidates(toInsert)
+            }
         }
 
-        // Advance cursor reliably only AFTER successful extraction and save
+        // Advance cursor reliably only AFTER successful extraction (or confirmed empty []) and save
         val newMaxId = newMessages.maxOf { it.id }
         dataStore.edit {
             it[PreferencesKeys.LAST_REVIEWED_MESSAGE_ID] = newMaxId
@@ -118,20 +137,31 @@ class ExtractCandidateMemoriesUseCase @Inject constructor(
         candidates.size
     }
 
-    private fun parseCandidatesJson(
+    /**
+     * Strictly parses candidate memories JSON array.
+     * Returns Result.failure if the text does not contain a valid JSON array or if parsing fails.
+     * Returns Result.success(emptyList()) only if the LLM returned a valid empty array `[]`.
+     */
+    fun parseCandidatesJsonStrict(
         rawText: String,
         fallbackMessageId: Long,
         fallbackTimestamp: Long
-    ): List<CandidateMemory> {
+    ): Result<List<CandidateMemory>> {
         val cleaned = rawText.replace(Regex("```[a-z]*\\s*"), "").replace("```", "").trim()
         val start = cleaned.indexOf('[')
         val end = cleaned.lastIndexOf(']')
-        if (start == -1 || end == -1 || start >= end) return emptyList()
+        if (start == -1 || end == -1 || start >= end) {
+            return Result.failure(IllegalArgumentException("AI response does not contain a valid JSON array: $rawText"))
+        }
 
         val jsonArrayStr = cleaned.substring(start, end + 1)
-        val array = runCatching { JSONArray(jsonArrayStr) }.getOrNull() ?: return emptyList()
-        val results = mutableListOf<CandidateMemory>()
+        val array = try {
+            JSONArray(jsonArrayStr)
+        } catch (e: Exception) {
+            return Result.failure(IllegalArgumentException("Malformed JSON array returned by AI: ${e.message}", e))
+        }
 
+        val results = mutableListOf<CandidateMemory>()
         for (i in 0 until array.length()) {
             val obj = array.optJSONObject(i) ?: continue
             val content = obj.optString("content").trim()
@@ -159,6 +189,6 @@ class ExtractCandidateMemoriesUseCase @Inject constructor(
                 )
             )
         }
-        return results
+        return Result.success(results)
     }
 }

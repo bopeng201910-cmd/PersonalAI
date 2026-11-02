@@ -8,8 +8,14 @@ interface CandidateMemoryRepository {
     fun getPendingCandidateMemories(): Flow<List<CandidateMemory>>
     fun getCandidateMemoriesByStatus(status: CandidateStatus): Flow<List<CandidateMemory>>
     suspend fun getById(id: Long): CandidateMemory?
+    suspend fun getBySourceMessageIds(sourceMessageIds: List<Long>): List<CandidateMemory>
     suspend fun saveCandidates(candidates: List<CandidateMemory>): List<Long>
     suspend fun updateStatus(id: Long, status: CandidateStatus)
     suspend fun updateContent(id: Long, content: String, topic: String)
     suspend fun deleteById(id: Long)
+    suspend fun approveCandidateInTransaction(
+        candidateId: Long,
+        customContent: String? = null,
+        customTopic: String? = null
+    ): Result<Boolean>
 }

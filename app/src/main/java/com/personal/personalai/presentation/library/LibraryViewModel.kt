@@ -161,7 +161,17 @@ class LibraryViewModel @Inject constructor(
         val ids = _uiState.value.candidateMemories.map { it.id }
         if (ids.isEmpty()) return
         viewModelScope.launch {
-            reviewCandidateMemoryUseCase.approveAll(ids)
+            val result = reviewCandidateMemoryUseCase.approveAll(ids)
+            if (result.failedCount > 0) {
+                _uiState.update {
+                    it.copy(
+                        infoMessage = "Saved ${result.succeededCount} memories. ${result.failedCount} failed.",
+                        error = if (result.succeededCount == 0) "Failed to save selected memories." else null
+                    )
+                }
+            } else {
+                _uiState.update { it.copy(infoMessage = "Successfully saved all ${result.succeededCount} memories.") }
+            }
         }
     }
 

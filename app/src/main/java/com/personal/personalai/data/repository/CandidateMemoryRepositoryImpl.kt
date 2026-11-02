@@ -1,6 +1,10 @@
 package com.personal.personalai.data.repository
 
+import androidx.room.withTransaction
+import com.personal.personalai.data.local.PersonalAIDatabase
 import com.personal.personalai.data.local.dao.CandidateMemoryDao
+import com.personal.personalai.data.local.dao.MemoryDao
+import com.personal.personalai.data.local.entity.MemoryEntity
 import com.personal.personalai.data.local.entity.toDomain
 import com.personal.personalai.data.local.entity.toEntity
 import com.personal.personalai.domain.model.CandidateMemory
@@ -13,7 +17,9 @@ import javax.inject.Singleton
 
 @Singleton
 class CandidateMemoryRepositoryImpl @Inject constructor(
-    private val candidateMemoryDao: CandidateMemoryDao
+    private val database: PersonalAIDatabase,
+    private val candidateMemoryDao: CandidateMemoryDao,
+    private val memoryDao: MemoryDao
 ) : CandidateMemoryRepository {
 
     override fun getPendingCandidateMemories(): Flow<List<CandidateMemory>> =
@@ -29,6 +35,10 @@ class CandidateMemoryRepositoryImpl @Inject constructor(
     override suspend fun getById(id: Long): CandidateMemory? =
         candidateMemoryDao.getById(id)?.toDomain()
 
+    override suspend fun getBySourceMessageIds(sourceMessageIds: List<Long>): List<CandidateMemory> =
+        if (sourceMessageIds.isEmpty()) emptyList()
+        else candidateMemoryDao.getBySourceMessageIds(sourceMessageIds).map { it.toDomain() }
+
     override suspend fun saveCandidates(candidates: List<CandidateMemory>): List<Long> =
         candidateMemoryDao.insertCandidateMemories(candidates.map { it.toEntity() })
 
@@ -42,5 +52,37 @@ class CandidateMemoryRepositoryImpl @Inject constructor(
 
     override suspend fun deleteById(id: Long) {
         candidateMemoryDao.deleteById(id)
+    }
+
+    override suspend fun approveCandidateInTransaction(
+        candidateId: Long,
+        customContent: String?,
+        customTopic: String?
+    ): Result<Boolean> = runCatching {
+        database.withTransaction {
+            val candidate = candidateMemoryDao.getById(candidateId)
+                ?: return@withTransaction false
+
+            // Strict check: Only PENDING candidates can be approved
+            if (candidate.status != CandidateStatus.PENDING.name) {
+                return@withTransaction false
+            }
+
+            val finalContent = customContent?.trim()?.ifBlank { candidate.content } ?: candidate.content
+            val finalTopic = customTopic?.trim() ?: candidate.topic
+
+            // 1. Insert official memory in the same transaction
+            memoryDao.insertMemory(
+                MemoryEntity(
+                    content = finalContent,
+                    topic = finalTopic,
+                    createdAt = if (candidate.sourceTimestamp > 0) candidate.sourceTimestamp else System.currentTimeMillis()
+                )
+            )
+
+            // 2. Mark candidate as APPROVED
+            candidateMemoryDao.updateStatus(candidateId, CandidateStatus.APPROVED.name)
+            true
+        }
     }
 }

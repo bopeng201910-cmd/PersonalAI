@@ -40,6 +40,10 @@ android {
         jvmTarget = "11"
     }
 
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
+
     buildFeatures {
         compose = true
     }
@@ -113,6 +117,7 @@ dependencies {
     // Unit Tests
     testImplementation(libs.junit)
     testImplementation(libs.mockk)
+    testImplementation("org.json:json:20240303")
     testImplementation(libs.kotlinx.coroutines.test)
 
     // Instrumented Tests

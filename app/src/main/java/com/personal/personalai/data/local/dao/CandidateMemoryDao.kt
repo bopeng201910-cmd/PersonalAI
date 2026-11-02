@@ -24,6 +24,9 @@ interface CandidateMemoryDao {
     @Query("SELECT * FROM candidate_memories WHERE sourceMessageId = :sourceMessageId")
     suspend fun getBySourceMessageId(sourceMessageId: Long): List<CandidateMemoryEntity>
 
+    @Query("SELECT * FROM candidate_memories WHERE sourceMessageId IN (:sourceMessageIds)")
+    suspend fun getBySourceMessageIds(sourceMessageIds: List<Long>): List<CandidateMemoryEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertCandidateMemory(candidate: CandidateMemoryEntity): Long
 
