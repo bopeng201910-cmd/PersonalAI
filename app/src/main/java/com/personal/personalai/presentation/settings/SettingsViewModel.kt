@@ -35,6 +35,9 @@ object PreferencesKeys {
     // and cold-start with the last N messages.
     val LAST_RESPONSE_ID    = stringPreferencesKey("last_response_id")
     val LAST_RESPONSE_AT_MS = longPreferencesKey("last_response_at_ms")
+
+    // Daily Memory Review cursor tracking
+    val LAST_REVIEWED_MESSAGE_ID = longPreferencesKey("last_reviewed_message_id")
 }
 
 @HiltViewModel

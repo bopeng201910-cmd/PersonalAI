@@ -5,11 +5,13 @@ import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.personal.personalai.data.local.dao.ApiUsageLogDao
+import com.personal.personalai.data.local.dao.CandidateMemoryDao
 import com.personal.personalai.data.local.dao.GeofenceTaskDao
 import com.personal.personalai.data.local.dao.MemoryDao
 import com.personal.personalai.data.local.dao.MessageDao
 import com.personal.personalai.data.local.dao.ScheduledTaskDao
 import com.personal.personalai.data.local.entity.ApiUsageLogEntity
+import com.personal.personalai.data.local.entity.CandidateMemoryEntity
 import com.personal.personalai.data.local.entity.GeofenceTaskEntity
 import com.personal.personalai.data.local.entity.MemoryEntity
 import com.personal.personalai.data.local.entity.MessageEntity
@@ -98,6 +100,27 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
     }
 }
 
+val MIGRATION_7_8 = object : Migration(7, 8) {
+    override fun migrate(database: SupportSQLiteDatabase) {
+        database.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS candidate_memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                content TEXT NOT NULL,
+                topic TEXT NOT NULL DEFAULT '',
+                originalSnippet TEXT NOT NULL DEFAULT '',
+                category TEXT NOT NULL DEFAULT 'OTHER_IMPORTANT',
+                sourceType TEXT NOT NULL DEFAULT 'EXPLICIT_FACT',
+                sourceMessageId INTEGER NOT NULL DEFAULT 0,
+                sourceTimestamp INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'PENDING',
+                createdAt INTEGER NOT NULL
+            )
+            """.trimIndent()
+        )
+    }
+}
+
 @Database(
     entities = [
         MessageEntity::class,
@@ -105,8 +128,9 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
         MemoryEntity::class,
         GeofenceTaskEntity::class,
         ApiUsageLogEntity::class,
+        CandidateMemoryEntity::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = false
 )
 abstract class PersonalAIDatabase : RoomDatabase() {
@@ -115,4 +139,5 @@ abstract class PersonalAIDatabase : RoomDatabase() {
     abstract fun memoryDao(): MemoryDao
     abstract fun geofenceTaskDao(): GeofenceTaskDao
     abstract fun apiUsageLogDao(): ApiUsageLogDao
+    abstract fun candidateMemoryDao(): CandidateMemoryDao
 }

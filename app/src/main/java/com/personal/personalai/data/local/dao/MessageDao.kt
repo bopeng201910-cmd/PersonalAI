@@ -13,6 +13,9 @@ interface MessageDao {
     @Query("SELECT * FROM messages ORDER BY timestamp ASC")
     fun getAllMessages(): Flow<List<MessageEntity>>
 
+    @Query("SELECT * FROM messages WHERE id > :afterId ORDER BY id ASC")
+    suspend fun getMessagesAfterId(afterId: Long): List<MessageEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMessage(message: MessageEntity): Long
 

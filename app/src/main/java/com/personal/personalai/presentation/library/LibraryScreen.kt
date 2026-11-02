@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -18,15 +19,25 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BookmarkBorder
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.RateReview
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -54,7 +65,10 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.personal.personalai.R
+import com.personal.personalai.domain.model.CandidateMemory
 import com.personal.personalai.domain.model.Memory
+import com.personal.personalai.domain.model.MemoryCategory
+import com.personal.personalai.domain.model.MemorySourceType
 import java.text.SimpleDateFormat
 import java.time.Instant
 import java.time.ZoneId
@@ -77,12 +91,30 @@ fun LibraryScreen(
         }
     }
 
+    LaunchedEffect(uiState.infoMessage) {
+        uiState.infoMessage?.let {
+            snackbarHostState.showSnackbar(it)
+            viewModel.dismissInfoMessage()
+        }
+    }
+
     // File detail dialog
     uiState.openedFile?.let { (filename, content) ->
         FileDetailDialog(
             filename = filename,
             content = content,
             onDismiss = viewModel::closeFile
+        )
+    }
+
+    // Candidate memory edit dialog
+    uiState.editingCandidate?.let { candidate ->
+        EditCandidateDialog(
+            candidate = candidate,
+            onDismiss = viewModel::dismissEditingCandidate,
+            onSave = { newContent, newTopic ->
+                viewModel.approveCandidate(candidate, newContent, newTopic)
+            }
         )
     }
 
@@ -104,6 +136,7 @@ fun LibraryScreen(
         ) {
             val tabs = listOf(
                 stringResource(R.string.library_tab_files),
+                "Review (${uiState.candidateMemories.size})",
                 stringResource(R.string.library_tab_memories)
             )
             TabRow(selectedTabIndex = uiState.selectedTab) {
@@ -122,7 +155,22 @@ fun LibraryScreen(
                     isLoading = uiState.isLoadingFiles,
                     onFileClick = viewModel::openFile
                 )
-                1 -> MemoriesTab(
+                1 -> CandidatesReviewTab(
+                    candidates = uiState.candidateMemories,
+                    isLoading = uiState.isLoadingCandidates,
+                    isExtracting = uiState.isExtracting,
+                    onTriggerReview = viewModel::triggerReviewExtraction,
+                    onApprove = { viewModel.approveCandidate(it) },
+                    onEdit = viewModel::startEditingCandidate,
+                    onDiscard = viewModel::discardCandidate,
+                    onApproveSelected = { selectedIds ->
+                        selectedIds.forEach { id ->
+                            viewModel.approveCandidate(CandidateMemory(id = id, content = ""))
+                        }
+                    },
+                    onApproveAll = viewModel::approveAllCandidates
+                )
+                2 -> MemoriesTab(
                     memories = uiState.memories,
                     isLoading = uiState.isLoadingMemories,
                     onDeleteMemory = viewModel::deleteMemory
@@ -183,6 +231,246 @@ private fun FileCard(file: FileEntry, onClick: () -> Unit) {
             )
         }
     }
+}
+
+@Composable
+private fun CandidatesReviewTab(
+    candidates: List<CandidateMemory>,
+    isLoading: Boolean,
+    isExtracting: Boolean,
+    onTriggerReview: () -> Unit,
+    onApprove: (CandidateMemory) -> Unit,
+    onEdit: (CandidateMemory) -> Unit,
+    onDiscard: (CandidateMemory) -> Unit,
+    onApproveSelected: (Set<Long>) -> Unit,
+    onApproveAll: () -> Unit
+) {
+    var selectedIds by remember(candidates) { mutableStateOf(emptySet<Long>()) }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedButton(
+                onClick = onTriggerReview,
+                enabled = !isExtracting,
+                modifier = Modifier.weight(1f)
+            ) {
+                if (isExtracting) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Scanning...")
+                } else {
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Scan Chats")
+                }
+            }
+
+            if (candidates.isNotEmpty()) {
+                if (selectedIds.isNotEmpty()) {
+                    Button(onClick = { onApproveSelected(selectedIds) }) {
+                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Save Selected (${selectedIds.size})")
+                    }
+                } else {
+                    Button(onClick = onApproveAll) {
+                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Save All (${candidates.size})")
+                    }
+                }
+            }
+        }
+
+        Box(modifier = Modifier.fillMaxSize().weight(1f)) {
+            when {
+                isLoading -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                candidates.isEmpty() -> EmptyState(
+                    icon = {
+                        Icon(
+                            Icons.Default.RateReview,
+                            contentDescription = null,
+                            modifier = Modifier.size(64.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    },
+                    text = "No pending candidate memories.\nTap 'Check Recent Chats' to scan for new ones."
+                )
+                else -> LazyColumn(
+                    contentPadding = PaddingValues(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    items(candidates, key = { it.id }) { candidate ->
+                        CandidateCard(
+                            candidate = candidate,
+                            isSelected = candidate.id in selectedIds,
+                            onToggleSelect = {
+                                selectedIds = if (candidate.id in selectedIds) {
+                                    selectedIds - candidate.id
+                                } else {
+                                    selectedIds + candidate.id
+                                }
+                            },
+                            onApprove = { onApprove(candidate) },
+                            onEdit = { onEdit(candidate) },
+                            onDiscard = { onDiscard(candidate) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CandidateCard(
+    candidate: CandidateMemory,
+    isSelected: Boolean,
+    onToggleSelect: () -> Unit,
+    onApprove: () -> Unit,
+    onEdit: () -> Unit,
+    onDiscard: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isSelected)
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+            else
+                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        )
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Checkbox(
+                        checked = isSelected,
+                        onCheckedChange = { onToggleSelect() },
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    SuggestionChip(
+                        onClick = {},
+                        label = { Text(formatCategoryLabel(candidate.category), style = MaterialTheme.typography.labelSmall) }
+                    )
+                    SuggestionChip(
+                        onClick = {},
+                        label = {
+                            Text(
+                                if (candidate.sourceType == MemorySourceType.EXPLICIT_FACT) "Direct Fact" else "Inferred",
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+            Text(candidate.content, style = MaterialTheme.typography.bodyLarge)
+
+            if (candidate.originalSnippet.isNotBlank()) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Source: \"${candidate.originalSnippet}\"",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Spacer(Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TextButton(onClick = onDiscard) {
+                    Icon(Icons.Default.Close, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                    Spacer(Modifier.width(4.dp))
+                    Text("Discard", color = MaterialTheme.colorScheme.error)
+                }
+                Spacer(Modifier.width(8.dp))
+                OutlinedButton(onClick = onEdit) {
+                    Icon(Icons.Default.Edit, contentDescription = null)
+                    Spacer(Modifier.width(4.dp))
+                    Text("Edit")
+                }
+                Spacer(Modifier.width(8.dp))
+                Button(onClick = onApprove) {
+                    Icon(Icons.Default.Check, contentDescription = null)
+                    Spacer(Modifier.width(4.dp))
+                    Text("Save")
+                }
+            }
+        }
+    }
+}
+
+private fun formatCategoryLabel(category: MemoryCategory): String = when (category) {
+    MemoryCategory.USER_PREFERENCE    -> "Preference"
+    MemoryCategory.IMPORTANT_DECISION -> "Decision"
+    MemoryCategory.LONG_TERM_GOAL     -> "Goal"
+    MemoryCategory.PROJECT_PROGRESS   -> "Progress"
+    MemoryCategory.TODO_ITEM          -> "Todo"
+    MemoryCategory.OTHER_IMPORTANT    -> "Important"
+}
+
+@Composable
+private fun EditCandidateDialog(
+    candidate: CandidateMemory,
+    onDismiss: () -> Unit,
+    onSave: (String, String) -> Unit
+) {
+    var content by remember { mutableStateOf(candidate.content) }
+    var topic by remember { mutableStateOf(candidate.topic) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edit Candidate Memory") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value = topic,
+                    onValueChange = { topic = it },
+                    label = { Text("Topic (optional)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = content,
+                    onValueChange = { content = it },
+                    label = { Text("Memory Content") },
+                    modifier = Modifier.fillMaxWidth(),
+                    minLines = 3
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSave(content, topic) },
+                enabled = content.isNotBlank()
+            ) {
+                Text("Approve & Save")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) }
+        }
+    )
 }
 
 @Composable

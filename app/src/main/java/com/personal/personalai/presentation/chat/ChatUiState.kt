@@ -18,5 +18,7 @@ data class ChatUiState(
     /** Non-null when the agent loop is paused waiting for the user to answer a question. */
     val pendingInputRequest: UserInputBroker.Request? = null,
     /** Non-null when the agent loop is paused waiting for the user to grant a permission. */
-    val pendingPermissionRequest: PermissionBroker.Request? = null
+    val pendingPermissionRequest: PermissionBroker.Request? = null,
+    /** Number of pending candidate memories waiting for daily review. */
+    val pendingReviewCount: Int = 0
 )

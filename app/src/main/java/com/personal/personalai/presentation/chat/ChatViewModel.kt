@@ -10,6 +10,8 @@ import com.personal.personalai.domain.tools.PermissionBroker
 import com.personal.personalai.domain.tools.UserInputBroker
 import com.personal.personalai.domain.usecase.AgentLoopUseCase
 import com.personal.personalai.domain.usecase.AgentStep
+import com.personal.personalai.domain.repository.CandidateMemoryRepository
+import com.personal.personalai.domain.usecase.ExtractCandidateMemoriesUseCase
 import com.personal.personalai.domain.usecase.GetChatHistoryUseCase
 import com.personal.personalai.domain.usecase.TranscribeAudioUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -29,6 +31,8 @@ class ChatViewModel @Inject constructor(
     private val audioRecorder: AudioRecorder,
     private val userInputBroker: UserInputBroker,
     private val permissionBroker: PermissionBroker,
+    private val candidateMemoryRepository: CandidateMemoryRepository,
+    private val extractCandidateMemoriesUseCase: ExtractCandidateMemoriesUseCase,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -39,6 +43,27 @@ class ChatViewModel @Inject constructor(
         observeMessages()
         observeUserInputRequests()
         observePermissionRequests()
+        observePendingReviewCount()
+        checkNewMessagesForMemoryReview()
+    }
+
+    private fun checkNewMessagesForMemoryReview() {
+        viewModelScope.launch {
+            // Background scan for any new unreviewed messages upon app launch
+            runCatching {
+                extractCandidateMemoriesUseCase()
+            }.onFailure { e ->
+                Log.w(TAG, "Automatic launch memory review check failed: ${e.message}")
+            }
+        }
+    }
+
+    private fun observePendingReviewCount() {
+        viewModelScope.launch {
+            candidateMemoryRepository.getPendingCandidateMemories().collect { list ->
+                _uiState.update { it.copy(pendingReviewCount = list.size) }
+            }
+        }
     }
 
     private fun observeMessages() {
