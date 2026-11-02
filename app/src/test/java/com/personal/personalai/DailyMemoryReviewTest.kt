@@ -253,4 +253,59 @@ class DailyMemoryReviewTest {
         coVerify(exactly = 0) { candidateRepo.saveCandidates(any()) }
         coVerify(exactly = 1) { dataStore.updateData(any()) }
     }
+
+    @Test
+    fun `test ExtractCandidateMemoriesUseCase does NOT advance cursor when AI call throws network error`() = runTest {
+        val messageDao = mockk<MessageDao>()
+        val candidateRepo = mockk<CandidateMemoryRepository>(relaxed = true)
+        val aiRepository = mockk<AiRepository>()
+        val dataStore = mockk<DataStore<Preferences>>(relaxed = true)
+
+        val prefs = mockk<Preferences>()
+        every { prefs[PreferencesKeys.LAST_REVIEWED_MESSAGE_ID] } returns 10L
+        every { dataStore.data } returns flowOf(prefs)
+
+        val messages = listOf(
+            MessageEntity(id = 11L, content = "Offline conversation", role = "USER", timestamp = 1000L)
+        )
+        coEvery { messageDao.getMessagesAfterId(10L) } returns messages
+        coEvery { aiRepository.sendMessageWithTools(any(), any(), any(), any()) } returns
+                Result.failure(java.net.ConnectException("Network unreachable or local server down"))
+
+        val useCase = ExtractCandidateMemoriesUseCase(messageDao, candidateRepo, aiRepository, dataStore)
+        val result = useCase()
+
+        assertTrue(result.isFailure)
+        coVerify(exactly = 0) { candidateRepo.saveCandidates(any()) }
+        coVerify(exactly = 0) { dataStore.updateData(any()) }
+    }
+
+    @Test
+    fun `test ExtractCandidateMemoriesUseCase does NOT advance cursor when candidate save throws DB error`() = runTest {
+        val messageDao = mockk<MessageDao>()
+        val candidateRepo = mockk<CandidateMemoryRepository>()
+        val aiRepository = mockk<AiRepository>()
+        val dataStore = mockk<DataStore<Preferences>>(relaxed = true)
+
+        val prefs = mockk<Preferences>()
+        every { prefs[PreferencesKeys.LAST_REVIEWED_MESSAGE_ID] } returns 10L
+        every { dataStore.data } returns flowOf(prefs)
+
+        val messages = listOf(
+            MessageEntity(id = 11L, content = "User likes apples", role = "USER", timestamp = 1000L)
+        )
+        coEvery { messageDao.getMessagesAfterId(10L) } returns messages
+        coEvery { candidateRepo.getBySourceMessageIds(any()) } returns emptyList()
+        coEvery { candidateRepo.saveCandidates(any()) } throws android.database.sqlite.SQLiteFullException("Disk full")
+
+        val aiJson = """[{"content": "User likes apples", "topic": "fruit", "source_message_id": 11}]"""
+        coEvery { aiRepository.sendMessageWithTools(any(), any(), any(), any()) } returns
+                Result.success(AgentResponse.Text(aiJson))
+
+        val useCase = ExtractCandidateMemoriesUseCase(messageDao, candidateRepo, aiRepository, dataStore)
+        val result = useCase()
+
+        assertTrue(result.isFailure)
+        coVerify(exactly = 0) { dataStore.updateData(any()) }
+    }
 }

@@ -164,9 +164,7 @@ fun LibraryScreen(
                     onEdit = viewModel::startEditingCandidate,
                     onDiscard = viewModel::discardCandidate,
                     onApproveSelected = { selectedIds ->
-                        selectedIds.forEach { id ->
-                            viewModel.approveCandidate(CandidateMemory(id = id, content = ""))
-                        }
+                        viewModel.approveCandidates(selectedIds.toList())
                     },
                     onApproveAll = viewModel::approveAllCandidates
                 )

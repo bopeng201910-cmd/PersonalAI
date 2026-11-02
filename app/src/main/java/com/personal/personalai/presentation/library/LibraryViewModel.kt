@@ -157,8 +157,7 @@ class LibraryViewModel @Inject constructor(
         }
     }
 
-    fun approveAllCandidates() {
-        val ids = _uiState.value.candidateMemories.map { it.id }
+    fun approveCandidates(ids: List<Long>) {
         if (ids.isEmpty()) return
         viewModelScope.launch {
             val result = reviewCandidateMemoryUseCase.approveAll(ids)
@@ -173,6 +172,10 @@ class LibraryViewModel @Inject constructor(
                 _uiState.update { it.copy(infoMessage = "Successfully saved all ${result.succeededCount} memories.") }
             }
         }
+    }
+
+    fun approveAllCandidates() {
+        approveCandidates(_uiState.value.candidateMemories.map { it.id })
     }
 
     fun discardCandidate(candidate: CandidateMemory) {
