@@ -106,11 +106,14 @@ class ExtractCandidateMemoriesUseCase @Inject constructor(
             is AgentResponse.ToolCalls -> ""
         }
 
+        val validMessageIds = newMessages.map { it.id }.toSet()
+
         // Strictly distinguish valid JSON (including empty array []) vs JSON parse errors
         val candidates = parseCandidatesJsonStrict(
-            text,
-            newMessages.first().id,
-            newMessages.last().timestamp
+            rawText = text,
+            validMessageIds = validMessageIds,
+            fallbackMessageId = newMessages.first().id,
+            fallbackTimestamp = newMessages.last().timestamp
         ).getOrThrow()
 
         if (candidates.isNotEmpty()) {
@@ -145,6 +148,7 @@ class ExtractCandidateMemoriesUseCase @Inject constructor(
      */
     fun parseCandidatesJsonStrict(
         rawText: String,
+        validMessageIds: Set<Long> = emptySet(),
         fallbackMessageId: Long,
         fallbackTimestamp: Long
     ): Result<List<CandidateMemory>> {
@@ -164,17 +168,40 @@ class ExtractCandidateMemoriesUseCase @Inject constructor(
 
         val results = mutableListOf<CandidateMemory>()
         for (i in 0 until array.length()) {
-            val obj = array.optJSONObject(i) ?: continue
-            val content = obj.optString("content").trim()
-            if (content.isBlank()) continue
+            val obj = array.optJSONObject(i)
+                ?: return Result.failure(IllegalArgumentException("Item at index $i is not a valid JSON object"))
+
+            if (!obj.has("content")) {
+                return Result.failure(IllegalArgumentException("Item at index $i is missing required 'content' field"))
+            }
+
+            val content = obj.getString("content").trim()
+            if (content.isBlank()) {
+                return Result.failure(IllegalArgumentException("Item at index $i has blank 'content'"))
+            }
 
             val topic = obj.optString("topic", "")
             val originalSnippet = obj.optString("original_snippet", "")
             val catStr = obj.optString("category", MemoryCategory.OTHER_IMPORTANT.name)
-            val category = runCatching { MemoryCategory.valueOf(catStr) }.getOrDefault(MemoryCategory.OTHER_IMPORTANT)
+            val category = runCatching { MemoryCategory.valueOf(catStr) }
+                .getOrElse {
+                    return Result.failure(IllegalArgumentException("Item at index $i has invalid category '$catStr'"))
+                }
             val sourceStr = obj.optString("source_type", MemorySourceType.EXPLICIT_FACT.name)
-            val sourceType = runCatching { MemorySourceType.valueOf(sourceStr) }.getOrDefault(MemorySourceType.EXPLICIT_FACT)
-            val sourceMsgId = obj.optLong("source_message_id", fallbackMessageId)
+            val sourceType = runCatching { MemorySourceType.valueOf(sourceStr) }
+                .getOrElse {
+                    return Result.failure(IllegalArgumentException("Item at index $i has invalid source_type '$sourceStr'"))
+                }
+
+            // Validate source_message_id
+            val rawMsgId = obj.optLong("source_message_id", fallbackMessageId)
+            val finalMsgId = if (validMessageIds.isNotEmpty() && rawMsgId !in validMessageIds) {
+                // If model hallucinated an unknown message ID, anchor to fallbackMessageId
+                fallbackMessageId
+            } else {
+                rawMsgId
+            }
+
             val sourceTs = obj.optLong("source_timestamp", fallbackTimestamp)
 
             results.add(
@@ -184,7 +211,7 @@ class ExtractCandidateMemoriesUseCase @Inject constructor(
                     originalSnippet = originalSnippet,
                     category = category,
                     sourceType = sourceType,
-                    sourceMessageId = sourceMsgId,
+                    sourceMessageId = finalMsgId,
                     sourceTimestamp = if (sourceTs > 0) sourceTs else fallbackTimestamp,
                     status = CandidateStatus.PENDING
                 )

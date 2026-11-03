@@ -144,22 +144,41 @@ class DailyMemoryReviewTest {
         val useCase = ExtractCandidateMemoriesUseCase(mockk(), mockk(), mockk(), mockk())
 
         // 1. Valid empty array
-        val emptyRes = useCase.parseCandidatesJsonStrict("[]", 1L, 1000L)
+        val emptyRes = useCase.parseCandidatesJsonStrict("[]", emptySet(), 1L, 1000L)
         assertTrue(emptyRes.isSuccess)
         assertTrue(emptyRes.getOrThrow().isEmpty())
 
         // 2. Valid empty array with whitespace and conversational wrap
-        val wrapRes = useCase.parseCandidatesJsonStrict("Here is your output: []", 1L, 1000L)
+        val wrapRes = useCase.parseCandidatesJsonStrict("Here is your output: []", emptySet(), 1L, 1000L)
         assertTrue(wrapRes.isSuccess)
         assertTrue(wrapRes.getOrThrow().isEmpty())
 
         // 3. Malformed JSON (unclosed bracket or invalid syntax)
-        val malformed1 = useCase.parseCandidatesJsonStrict("[ { \"content\": \"test\" ", 1L, 1000L)
+        val malformed1 = useCase.parseCandidatesJsonStrict("[ { \"content\": \"test\" ", emptySet(), 1L, 1000L)
         assertTrue(malformed1.isFailure)
 
         // 4. No JSON array in response at all
-        val noJson = useCase.parseCandidatesJsonStrict("Hello there, no memories found today.", 1L, 1000L)
+        val noJson = useCase.parseCandidatesJsonStrict("Hello there, no memories found today.", emptySet(), 1L, 1000L)
         assertTrue(noJson.isFailure)
+
+        // 5. Array containing element with missing content field fails explicitly instead of silently skipping
+        val missingContent = useCase.parseCandidatesJsonStrict("""[{"topic": "only_topic"}]""", emptySet(), 1L, 1000L)
+        assertTrue(missingContent.isFailure)
+
+        // 6. Array containing invalid category fails explicitly
+        val invalidCategory = useCase.parseCandidatesJsonStrict("""[{"content": "valid", "category": "NOT_A_CATEGORY"}]""", emptySet(), 1L, 1000L)
+        assertTrue(invalidCategory.isFailure)
+
+        // 7. Hallucinated source_message_id is sanitized to valid fallback
+        val validSet = setOf(10L, 11L)
+        val hallucinatedId = useCase.parseCandidatesJsonStrict(
+            """[{"content": "valid content", "source_message_id": 99999}]""",
+            validSet,
+            fallbackMessageId = 10L,
+            fallbackTimestamp = 1000L
+        )
+        assertTrue(hallucinatedId.isSuccess)
+        assertEquals(10L, hallucinatedId.getOrThrow()[0].sourceMessageId)
     }
 
     @Test

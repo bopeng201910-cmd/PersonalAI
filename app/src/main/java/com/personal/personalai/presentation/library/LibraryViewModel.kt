@@ -152,8 +152,13 @@ class LibraryViewModel @Inject constructor(
 
     fun approveCandidate(candidate: CandidateMemory, customContent: String? = null, customTopic: String? = null) {
         viewModelScope.launch {
-            reviewCandidateMemoryUseCase.approveCandidate(candidate.id, customContent, customTopic)
-            _uiState.update { it.copy(editingCandidate = null) }
+            val result = reviewCandidateMemoryUseCase.approveCandidate(candidate.id, customContent, customTopic)
+            if (result.isSuccess && result.getOrNull() == true) {
+                _uiState.update { it.copy(editingCandidate = null, infoMessage = "Memory approved and saved.") }
+            } else {
+                val errorMsg = result.exceptionOrNull()?.message ?: "Failed to save memory. Item may no longer be pending."
+                _uiState.update { it.copy(error = errorMsg) }
+            }
         }
     }
 
