@@ -28,6 +28,7 @@ import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.resetMain
@@ -451,32 +452,169 @@ class DailyMemoryReviewTest {
     // ── Concurrency and Mutex Tests ───────────────────────────────────────────
 
     @Test
-    fun `test ExtractCandidateMemoriesUseCase serializes concurrent extraction invocations safely`() = runTest {
+    fun `test ExtractCandidateMemoriesUseCase serializes concurrent extraction invocations via Mutex`() = runTest {
         val messageDao = mockk<MessageDao>()
         val candidateRepo = mockk<CandidateMemoryRepository>(relaxed = true)
         val aiRepository = mockk<AiRepository>()
-        val dataStore = mockk<DataStore<Preferences>>(relaxed = true)
+        val dataStore = mockk<DataStore<Preferences>>()
 
-        val prefs = mockk<Preferences>()
-        every { prefs[PreferencesKeys.LAST_REVIEWED_MESSAGE_ID] } returns 10L
-        every { dataStore.data } returns flowOf(prefs)
+        // In-memory cursor to track dataStore updates realistically across concurrent calls
+        var currentCursor = 10L
+        every { dataStore.data } answers {
+            val p = mockk<Preferences>()
+            every { p[PreferencesKeys.LAST_REVIEWED_MESSAGE_ID] } returns currentCursor
+            flowOf(p)
+        }
+        coEvery { dataStore.updateData(any()) } answers {
+            // When dataStore.edit is called, simulate cursor advancement
+            currentCursor = 11L
+            val p = mockk<Preferences>()
+            every { p[PreferencesKeys.LAST_REVIEWED_MESSAGE_ID] } returns currentCursor
+            p
+        }
 
         val messages = listOf(
             MessageEntity(id = 11L, content = "User message", role = "USER", timestamp = 1000L)
         )
+        // Before cursor is updated (cursor = 10), messages after 10 contains msg 11.
+        // After cursor is updated (cursor = 11), messages after 11 is empty.
         coEvery { messageDao.getMessagesAfterId(10L) } returns messages
+        coEvery { messageDao.getMessagesAfterId(11L) } returns emptyList()
         coEvery { candidateRepo.getBySourceMessageIds(any()) } returns emptyList()
-        coEvery { aiRepository.sendMessageWithTools(any(), any(), any(), any(), any()) } returns
-                Result.success(AgentResponse.Text("""[{"content": "fact", "source_message_id": 11}]"""))
+
+        // Synchronization barrier to deterministically hold Job 1 inside the Mutex critical section
+        val job1EnteredCriticalSection = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val job1AllowFinish = kotlinx.coroutines.CompletableDeferred<Unit>()
+
+        coEvery { aiRepository.sendMessageWithTools(any(), any(), any(), any(), any()) } coAnswers {
+            job1EnteredCriticalSection.complete(Unit)
+            job1AllowFinish.await()
+            Result.success(AgentResponse.Text("""[{"content": "fact", "source_message_id": 11}]"""))
+        }
 
         val useCase = ExtractCandidateMemoriesUseCase(messageDao, candidateRepo, aiRepository, dataStore)
 
-        // Run sequential and concurrent checks
-        val res1 = useCase()
-        val res2 = useCase()
+        // Launch first extraction in a concurrent coroutine
+        val job1 = async { useCase() }
+
+        // Wait until Job 1 is inside the critical section (holding the Mutex)
+        job1EnteredCriticalSection.await()
+
+        // Launch second extraction concurrently while Job 1 is still inside the critical section
+        val job2 = async { useCase() }
+
+        // Advance dispatcher to give job2 a chance to run up to the Mutex lock
+        testScheduler.advanceUntilIdle()
+
+        // Prove that Job 2 is suspended waiting for the Mutex and cannot complete while Job 1 holds the lock
+        assertFalse("Job 1 must still be running inside critical section", job1.isCompleted)
+        assertFalse("Job 2 must be blocked waiting for Mutex", job2.isCompleted)
+
+        // Now allow Job 1 to finish its AI call and release the Mutex
+        job1AllowFinish.complete(Unit)
+        testScheduler.advanceUntilIdle()
+
+        // Both jobs should now be completed
+        assertTrue("Job 1 should have completed successfully", job1.isCompleted)
+        assertTrue("Job 2 should have completed successfully", job2.isCompleted)
+
+        val res1 = job1.await()
+        val res2 = job2.await()
 
         assertTrue(res1.isSuccess)
+        assertEquals("Job 1 should have extracted 1 candidate", 1, res1.getOrThrow())
+
         assertTrue(res2.isSuccess)
+        assertEquals("Job 2 should observe updated cursor and extract 0 candidates", 0, res2.getOrThrow())
+
+        // Verify that candidates were only saved once (no duplicates created by the concurrent invocation)
+        coVerify(exactly = 1) { candidateRepo.saveCandidates(any()) }
+    }
+
+    @Test
+    fun `test ExtractCandidateMemoriesUseCase concurrent extraction handles new messages arriving during execution`() = runTest {
+        val messageDao = mockk<MessageDao>()
+        val candidateRepo = mockk<CandidateMemoryRepository>(relaxed = true)
+        val aiRepository = mockk<AiRepository>()
+        val dataStore = mockk<DataStore<Preferences>>()
+
+        var currentCursor = 10L
+        every { dataStore.data } answers {
+            val p = mockk<Preferences>()
+            every { p[PreferencesKeys.LAST_REVIEWED_MESSAGE_ID] } returns currentCursor
+            flowOf(p)
+        }
+        coEvery { dataStore.updateData(any()) } answers {
+            // Emulate dataStore.edit advancing cursor
+            val transform = firstArg<suspend (Preferences) -> Preferences>()
+            // In our test, cursor advances to the maxId of the batch
+            val p = mockk<Preferences>()
+            p
+        }
+
+        val msg11 = MessageEntity(id = 11L, content = "User likes tea", role = "USER", timestamp = 1000L)
+        val msg12 = MessageEntity(id = 12L, content = "User likes coffee", role = "USER", timestamp = 2000L)
+
+        // Initial state: cursor is 10, msg11 is available
+        coEvery { messageDao.getMessagesAfterId(10L) } returns listOf(msg11)
+        // Second call: cursor becomes 11, msg12 arrived during Job 1
+        coEvery { messageDao.getMessagesAfterId(11L) } returns listOf(msg12)
+
+        coEvery { candidateRepo.getBySourceMessageIds(any()) } returns emptyList()
+
+        val job1Entered = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val job1Proceed = kotlinx.coroutines.CompletableDeferred<Unit>()
+
+        coEvery {
+            aiRepository.sendMessageWithTools(
+                conversationItems = match { it.toString().contains("User likes tea") },
+                any(), any(), any(), any()
+            )
+        } coAnswers {
+            job1Entered.complete(Unit)
+            job1Proceed.await()
+            // When job1 completes, advance in-memory cursor to 11
+            currentCursor = 11L
+            Result.success(AgentResponse.Text("""[{"content": "Likes tea", "source_message_id": 11}]"""))
+        }
+
+        coEvery {
+            aiRepository.sendMessageWithTools(
+                conversationItems = match { it.toString().contains("User likes coffee") },
+                any(), any(), any(), any()
+            )
+        } coAnswers {
+            currentCursor = 12L
+            Result.success(AgentResponse.Text("""[{"content": "Likes coffee", "source_message_id": 12}]"""))
+        }
+
+        val useCase = ExtractCandidateMemoriesUseCase(messageDao, candidateRepo, aiRepository, dataStore)
+
+        val job1 = async { useCase() }
+        job1Entered.await()
+
+        val job2 = async { useCase() }
+        testScheduler.advanceUntilIdle()
+
+        assertFalse(job1.isCompleted)
+        assertFalse(job2.isCompleted)
+
+        job1Proceed.complete(Unit)
+        testScheduler.advanceUntilIdle()
+
+        assertTrue(job1.isCompleted)
+        assertTrue(job2.isCompleted)
+
+        val res1 = job1.await()
+        val res2 = job2.await()
+
+        assertTrue(res1.isSuccess)
+        assertEquals(1, res1.getOrThrow())
+        assertTrue(res2.isSuccess)
+        assertEquals(1, res2.getOrThrow())
+
+        // Verify candidate saves: exactly 2 distinct candidates saved without loss
+        coVerify(exactly = 2) { candidateRepo.saveCandidates(any()) }
     }
 
     // ── P1-2 LibraryViewModel Approval and Feedback Tests ─────────────────────
