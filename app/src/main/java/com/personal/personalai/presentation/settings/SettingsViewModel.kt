@@ -3,6 +3,8 @@ package com.personal.personalai.presentation.settings
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -38,6 +40,11 @@ object PreferencesKeys {
 
     // Daily Memory Review cursor tracking
     val LAST_REVIEWED_MESSAGE_ID = longPreferencesKey("last_reviewed_message_id")
+
+    // Lumio Foundation Security & Cost Control
+    val CLOUD_ENHANCEMENT_ENABLED = booleanPreferencesKey("cloud_enhancement_enabled")
+    val USER_TIER                 = stringPreferencesKey("user_tier")
+    val MONTHLY_BUDGET_USD        = doublePreferencesKey("monthly_budget_usd")
 }
 
 @HiltViewModel

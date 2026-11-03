@@ -13,6 +13,9 @@ interface ApiUsageLogDao {
     @Query("SELECT * FROM api_usage_logs ORDER BY timestamp DESC")
     fun getAllLogs(): Flow<List<ApiUsageLogEntity>>
 
+    @Query("SELECT COALESCE(SUM(estimatedCostUsd), 0.0) FROM api_usage_logs WHERE timestamp >= :sinceTimestamp")
+    suspend fun getCostSince(sinceTimestamp: Long): Double
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertLog(log: ApiUsageLogEntity): Long
 

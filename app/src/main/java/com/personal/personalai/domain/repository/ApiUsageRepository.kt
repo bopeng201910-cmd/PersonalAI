@@ -6,5 +6,6 @@ import kotlinx.coroutines.flow.Flow
 interface ApiUsageRepository {
     fun observeAllLogs(): Flow<List<ApiUsageLog>>
     suspend fun logCall(log: ApiUsageLog): Long
+    suspend fun getCurrentMonthCostUsd(): Double
     suspend fun clearAllLogs()
 }

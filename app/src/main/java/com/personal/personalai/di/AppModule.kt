@@ -24,9 +24,11 @@ import com.personal.personalai.data.local.dao.MessageDao
 import com.personal.personalai.data.local.dao.ScheduledTaskDao
 import com.personal.personalai.data.audio.AudioRecorderImpl
 import com.personal.personalai.data.datasource.ai.LocalLlmDataSource
+import com.personal.personalai.data.network.PrivacyNetworkInterceptor
 import com.personal.personalai.data.repository.AiRepositoryImpl
 import com.personal.personalai.data.repository.ApiUsageRepositoryImpl
 import com.personal.personalai.data.repository.CandidateMemoryRepositoryImpl
+import com.personal.personalai.data.router.LumioAiRouterImpl
 import com.personal.personalai.localllm.engine.LiteRtLlmEngine
 import com.personal.personalai.data.repository.ChatRepositoryImpl
 import com.personal.personalai.data.repository.GeofenceTaskRepositoryImpl
@@ -67,6 +69,7 @@ import com.personal.personalai.domain.repository.ChatRepository
 import com.personal.personalai.domain.repository.GeofenceTaskRepository
 import com.personal.personalai.domain.repository.MemoryRepository
 import com.personal.personalai.domain.repository.TaskRepository
+import com.personal.personalai.domain.router.LumioAiRouter
 import com.personal.personalai.domain.tools.AgentTool
 import com.personal.personalai.domain.tools.ToolRegistry
 import dagger.Binds
@@ -142,11 +145,12 @@ object DatabaseModule {
 
     @Provides
     @Singleton
-    fun provideOkHttpClient(): OkHttpClient =
+    fun provideOkHttpClient(privacyNetworkInterceptor: PrivacyNetworkInterceptor): OkHttpClient =
         OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
+            .addInterceptor(privacyNetworkInterceptor)
             .build()
 }
 
@@ -157,6 +161,10 @@ abstract class RepositoryModule {
     @Binds
     @Singleton
     abstract fun bindAudioRecorder(impl: AudioRecorderImpl): AudioRecorder
+
+    @Binds
+    @Singleton
+    abstract fun bindLumioAiRouter(impl: LumioAiRouterImpl): LumioAiRouter
 
     @Binds
     @Singleton
