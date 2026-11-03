@@ -54,10 +54,12 @@ class ChatViewModel @Inject constructor(
     private fun checkNewMessagesForMemoryReview() {
         viewModelScope.launch {
             // Background scan for any new unreviewed messages upon app launch
-            runCatching {
+            try {
                 extractCandidateMemoriesUseCase()
-            }.onFailure { e ->
-                Log.w(TAG, "Automatic launch memory review check failed: ${e.message}")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Automatic launch memory review check failed: ${e.message}", e)
             }
         }
     }
