@@ -104,20 +104,22 @@ val MIGRATION_7_8 = object : Migration(7, 8) {
     override fun migrate(database: SupportSQLiteDatabase) {
         database.execSQL(
             """
-            CREATE TABLE IF NOT EXISTS candidate_memories (
-                id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                content TEXT NOT NULL,
-                topic TEXT NOT NULL DEFAULT '',
-                originalSnippet TEXT NOT NULL DEFAULT '',
-                category TEXT NOT NULL DEFAULT 'OTHER_IMPORTANT',
-                sourceType TEXT NOT NULL DEFAULT 'EXPLICIT_FACT',
-                sourceMessageId INTEGER NOT NULL DEFAULT 0,
-                sourceTimestamp INTEGER NOT NULL DEFAULT 0,
-                status TEXT NOT NULL DEFAULT 'PENDING',
-                createdAt INTEGER NOT NULL
+            CREATE TABLE IF NOT EXISTS `candidate_memories` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `content` TEXT NOT NULL,
+                `topic` TEXT NOT NULL DEFAULT '',
+                `originalSnippet` TEXT NOT NULL DEFAULT '',
+                `category` TEXT NOT NULL DEFAULT 'OTHER_IMPORTANT',
+                `sourceType` TEXT NOT NULL DEFAULT 'EXPLICIT_FACT',
+                `sourceMessageId` INTEGER NOT NULL DEFAULT 0,
+                `sourceTimestamp` INTEGER NOT NULL DEFAULT 0,
+                `status` TEXT NOT NULL DEFAULT 'PENDING',
+                `createdAt` INTEGER NOT NULL
             )
             """.trimIndent()
         )
+        database.execSQL("CREATE INDEX IF NOT EXISTS `index_candidate_memories_status` ON `candidate_memories` (`status`)")
+        database.execSQL("CREATE INDEX IF NOT EXISTS `index_candidate_memories_sourceMessageId` ON `candidate_memories` (`sourceMessageId`)")
     }
 }
 
