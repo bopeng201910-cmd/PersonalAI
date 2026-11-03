@@ -2,6 +2,7 @@ package com.personal.personalai
 
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.mutablePreferencesOf
 import com.personal.personalai.data.local.dao.CandidateMemoryDao
 import com.personal.personalai.data.local.dao.MessageDao
 import com.personal.personalai.data.local.entity.CandidateMemoryEntity
@@ -458,19 +459,14 @@ class DailyMemoryReviewTest {
         val aiRepository = mockk<AiRepository>()
         val dataStore = mockk<DataStore<Preferences>>()
 
-        // In-memory cursor to track dataStore updates realistically across concurrent calls
-        var currentCursor = 10L
-        every { dataStore.data } answers {
-            val p = mockk<Preferences>()
-            every { p[PreferencesKeys.LAST_REVIEWED_MESSAGE_ID] } returns currentCursor
-            flowOf(p)
-        }
-        coEvery { dataStore.updateData(any()) } answers {
-            // When dataStore.edit is called, simulate cursor advancement
-            currentCursor = 11L
-            val p = mockk<Preferences>()
-            every { p[PreferencesKeys.LAST_REVIEWED_MESSAGE_ID] } returns currentCursor
-            p
+        // Faithful DataStore simulation executing actual transform on Preferences
+        var storedPrefs: Preferences = mutablePreferencesOf(PreferencesKeys.LAST_REVIEWED_MESSAGE_ID to 10L)
+        every { dataStore.data } answers { flowOf(storedPrefs) }
+        coEvery { dataStore.updateData(any()) } coAnswers {
+            val transform = firstArg<suspend (Preferences) -> Preferences>()
+            val updated = transform(storedPrefs)
+            storedPrefs = updated
+            updated
         }
 
         val messages = listOf(
@@ -527,6 +523,9 @@ class DailyMemoryReviewTest {
         assertTrue(res2.isSuccess)
         assertEquals("Job 2 should observe updated cursor and extract 0 candidates", 0, res2.getOrThrow())
 
+        // Verify cursor in DataStore was actually updated to 11 via dataStore.edit
+        assertEquals(11L, storedPrefs[PreferencesKeys.LAST_REVIEWED_MESSAGE_ID])
+
         // Verify that candidates were only saved once (no duplicates created by the concurrent invocation)
         coVerify(exactly = 1) { candidateRepo.saveCandidates(any()) }
     }
@@ -538,18 +537,14 @@ class DailyMemoryReviewTest {
         val aiRepository = mockk<AiRepository>()
         val dataStore = mockk<DataStore<Preferences>>()
 
-        var currentCursor = 10L
-        every { dataStore.data } answers {
-            val p = mockk<Preferences>()
-            every { p[PreferencesKeys.LAST_REVIEWED_MESSAGE_ID] } returns currentCursor
-            flowOf(p)
-        }
-        coEvery { dataStore.updateData(any()) } answers {
-            // Emulate dataStore.edit advancing cursor
+        // Faithful DataStore simulation executing actual transform on Preferences
+        var storedPrefs: Preferences = mutablePreferencesOf(PreferencesKeys.LAST_REVIEWED_MESSAGE_ID to 10L)
+        every { dataStore.data } answers { flowOf(storedPrefs) }
+        coEvery { dataStore.updateData(any()) } coAnswers {
             val transform = firstArg<suspend (Preferences) -> Preferences>()
-            // In our test, cursor advances to the maxId of the batch
-            val p = mockk<Preferences>()
-            p
+            val updated = transform(storedPrefs)
+            storedPrefs = updated
+            updated
         }
 
         val msg11 = MessageEntity(id = 11L, content = "User likes tea", role = "USER", timestamp = 1000L)
@@ -557,7 +552,7 @@ class DailyMemoryReviewTest {
 
         // Initial state: cursor is 10, msg11 is available
         coEvery { messageDao.getMessagesAfterId(10L) } returns listOf(msg11)
-        // Second call: cursor becomes 11, msg12 arrived during Job 1
+        // Second call: cursor becomes 11 via DataStore update, msg12 arrived during Job 1
         coEvery { messageDao.getMessagesAfterId(11L) } returns listOf(msg12)
 
         coEvery { candidateRepo.getBySourceMessageIds(any()) } returns emptyList()
@@ -565,6 +560,7 @@ class DailyMemoryReviewTest {
         val job1Entered = kotlinx.coroutines.CompletableDeferred<Unit>()
         val job1Proceed = kotlinx.coroutines.CompletableDeferred<Unit>()
 
+        // Notice: AI mocks do NOT touch or modify DataStore cursor at all!
         coEvery {
             aiRepository.sendMessageWithTools(
                 conversationItems = match { it.toString().contains("User likes tea") },
@@ -573,8 +569,6 @@ class DailyMemoryReviewTest {
         } coAnswers {
             job1Entered.complete(Unit)
             job1Proceed.await()
-            // When job1 completes, advance in-memory cursor to 11
-            currentCursor = 11L
             Result.success(AgentResponse.Text("""[{"content": "Likes tea", "source_message_id": 11}]"""))
         }
 
@@ -583,10 +577,7 @@ class DailyMemoryReviewTest {
                 conversationItems = match { it.toString().contains("User likes coffee") },
                 any(), any(), any(), any()
             )
-        } coAnswers {
-            currentCursor = 12L
-            Result.success(AgentResponse.Text("""[{"content": "Likes coffee", "source_message_id": 12}]"""))
-        }
+        } returns Result.success(AgentResponse.Text("""[{"content": "Likes coffee", "source_message_id": 12}]"""))
 
         val useCase = ExtractCandidateMemoriesUseCase(messageDao, candidateRepo, aiRepository, dataStore)
 
@@ -596,8 +587,8 @@ class DailyMemoryReviewTest {
         val job2 = async { useCase() }
         testScheduler.advanceUntilIdle()
 
-        assertFalse(job1.isCompleted)
-        assertFalse(job2.isCompleted)
+        assertFalse("Job 1 is running", job1.isCompleted)
+        assertFalse("Job 2 is waiting on Mutex", job2.isCompleted)
 
         job1Proceed.complete(Unit)
         testScheduler.advanceUntilIdle()
@@ -613,7 +604,10 @@ class DailyMemoryReviewTest {
         assertTrue(res2.isSuccess)
         assertEquals(1, res2.getOrThrow())
 
-        // Verify candidate saves: exactly 2 distinct candidates saved without loss
+        // Verify DataStore cursor was realistically advanced to 12 by the production code
+        assertEquals(12L, storedPrefs[PreferencesKeys.LAST_REVIEWED_MESSAGE_ID])
+
+        // Verify candidate saves: exactly 2 distinct candidates saved without loss or duplication
         coVerify(exactly = 2) { candidateRepo.saveCandidates(any()) }
     }
 
