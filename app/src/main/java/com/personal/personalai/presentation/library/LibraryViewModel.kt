@@ -157,7 +157,16 @@ class LibraryViewModel @Inject constructor(
                 _uiState.update { it.copy(editingCandidate = null, infoMessage = "Memory approved and saved.") }
             } else {
                 val errorMsg = result.exceptionOrNull()?.message ?: "Failed to save memory. Item may no longer be pending."
-                _uiState.update { it.copy(error = errorMsg) }
+                // Retain editingCandidate with user's customized content so edits are not lost, while surfacing error
+                val updatedCandidate = if (customContent != null || customTopic != null) {
+                    candidate.copy(
+                        content = customContent ?: candidate.content,
+                        topic = customTopic ?: candidate.topic
+                    )
+                } else {
+                    candidate
+                }
+                _uiState.update { it.copy(editingCandidate = updatedCandidate, error = errorMsg) }
             }
         }
     }

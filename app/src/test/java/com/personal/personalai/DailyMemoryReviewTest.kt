@@ -2,8 +2,6 @@ package com.personal.personalai
 
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
-import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.preferencesOf
 import com.personal.personalai.data.local.dao.CandidateMemoryDao
 import com.personal.personalai.data.local.dao.MessageDao
 import com.personal.personalai.data.local.entity.CandidateMemoryEntity
@@ -18,23 +16,46 @@ import com.personal.personalai.domain.model.MemorySourceType
 import com.personal.personalai.domain.repository.AiRepository
 import com.personal.personalai.domain.repository.CandidateMemoryRepository
 import com.personal.personalai.domain.repository.MemoryRepository
+import com.personal.personalai.domain.router.LumioTaskType
 import com.personal.personalai.domain.tools.AgentResponse
 import com.personal.personalai.domain.usecase.ExtractCandidateMemoriesUseCase
 import com.personal.personalai.domain.usecase.ReviewCandidateMemoryUseCase
+import com.personal.personalai.presentation.library.LibraryViewModel
 import com.personal.personalai.presentation.settings.PreferencesKeys
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
-import io.mockk.slot
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class DailyMemoryReviewTest {
+
+    private val testDispatcher = StandardTestDispatcher()
+
+    @Before
+    fun setUp() {
+        Dispatchers.setMain(testDispatcher)
+    }
+
+    @After
+    fun tearDown() {
+        Dispatchers.resetMain()
+    }
 
     @Test
     fun `test CandidateMemoryEntity domain conversion`() {
@@ -98,7 +119,6 @@ class DailyMemoryReviewTest {
     @Test
     fun `test ReviewCandidateMemoryUseCase prevents duplicate save on non-PENDING candidate`() = runTest {
         val candidateRepo = mockk<CandidateMemoryRepository>(relaxed = true)
-        // Returns false because candidate is already APPROVED or DISCARDED
         coEvery {
             candidateRepo.approveCandidateInTransaction(7L, any(), any())
         } returns Result.success(false)
@@ -139,46 +159,141 @@ class DailyMemoryReviewTest {
         assertEquals(1, candidateMemories.size)
     }
 
+    // ── P1-1 Strict JSON Tests ────────────────────────────────────────────────
+
     @Test
     fun `test strict JSON parser distinguishes malformed JSON from valid empty array`() {
         val useCase = ExtractCandidateMemoriesUseCase(mockk(), mockk(), mockk(), mockk())
 
         // 1. Valid empty array
-        val emptyRes = useCase.parseCandidatesJsonStrict("[]", emptySet(), 1L, 1000L)
+        val emptyRes = useCase.parseCandidatesJsonStrict("[]", emptySet(), 1000L)
         assertTrue(emptyRes.isSuccess)
         assertTrue(emptyRes.getOrThrow().isEmpty())
 
-        // 2. Valid empty array with whitespace and conversational wrap
-        val wrapRes = useCase.parseCandidatesJsonStrict("Here is your output: []", emptySet(), 1L, 1000L)
+        // 2. Valid empty array with conversational wrap
+        val wrapRes = useCase.parseCandidatesJsonStrict("Here is your output: []", emptySet(), 1000L)
         assertTrue(wrapRes.isSuccess)
         assertTrue(wrapRes.getOrThrow().isEmpty())
 
-        // 3. Malformed JSON (unclosed bracket or invalid syntax)
-        val malformed1 = useCase.parseCandidatesJsonStrict("[ { \"content\": \"test\" ", emptySet(), 1L, 1000L)
+        // 3. Malformed JSON (unclosed syntax)
+        val malformed1 = useCase.parseCandidatesJsonStrict("[ { \"content\": \"test\" ", emptySet(), 1000L)
         assertTrue(malformed1.isFailure)
 
         // 4. No JSON array in response at all
-        val noJson = useCase.parseCandidatesJsonStrict("Hello there, no memories found today.", emptySet(), 1L, 1000L)
+        val noJson = useCase.parseCandidatesJsonStrict("Hello there, no memories found today.", emptySet(), 1000L)
         assertTrue(noJson.isFailure)
 
-        // 5. Array containing element with missing content field fails explicitly instead of silently skipping
-        val missingContent = useCase.parseCandidatesJsonStrict("""[{"topic": "only_topic"}]""", emptySet(), 1L, 1000L)
+        // 5. Non-object elements mixed in array
+        val nonObjectArray = useCase.parseCandidatesJsonStrict("""["not an object", 123]""", emptySet(), 1000L)
+        assertTrue(nonObjectArray.isFailure)
+
+        // 6. Record missing content field
+        val missingContent = useCase.parseCandidatesJsonStrict("""[{"topic": "only_topic", "source_message_id": 10}]""", setOf(10L), 1000L)
         assertTrue(missingContent.isFailure)
 
-        // 6. Array containing invalid category fails explicitly
-        val invalidCategory = useCase.parseCandidatesJsonStrict("""[{"content": "valid", "category": "NOT_A_CATEGORY"}]""", emptySet(), 1L, 1000L)
+        // 7. Content is empty string
+        val emptyContent = useCase.parseCandidatesJsonStrict("""[{"content": "", "source_message_id": 10}]""", setOf(10L), 1000L)
+        assertTrue(emptyContent.isFailure)
+
+        // 8. Content is only whitespace
+        val whitespaceContent = useCase.parseCandidatesJsonStrict("""[{"content": "   ", "source_message_id": 10}]""", setOf(10L), 1000L)
+        assertTrue(whitespaceContent.isFailure)
+
+        // 9. Invalid category
+        val invalidCategory = useCase.parseCandidatesJsonStrict("""[{"content": "valid", "category": "INVALID_CAT", "source_message_id": 10}]""", setOf(10L), 1000L)
         assertTrue(invalidCategory.isFailure)
 
-        // 7. Hallucinated source_message_id is sanitized to valid fallback
-        val validSet = setOf(10L, 11L)
-        val hallucinatedId = useCase.parseCandidatesJsonStrict(
-            """[{"content": "valid content", "source_message_id": 99999}]""",
+        // 10. Invalid source_type
+        val invalidSourceType = useCase.parseCandidatesJsonStrict("""[{"content": "valid", "source_type": "UNKNOWN_SOURCE", "source_message_id": 10}]""", setOf(10L), 1000L)
+        assertTrue(invalidSourceType.isFailure)
+    }
+
+    // ── P1-3 Strict source_message_id Tests ───────────────────────────────────
+
+    @Test
+    fun `test source_message_id validation rules`() {
+        val useCase = ExtractCandidateMemoriesUseCase(mockk(), mockk(), mockk(), mockk())
+        val validSet = setOf(101L, 102L)
+
+        // 1. Valid and belongs to current batch: PASS
+        val validRes = useCase.parseCandidatesJsonStrict(
+            """[{"content": "I like running", "source_message_id": 101}]""",
             validSet,
-            fallbackMessageId = 10L,
-            fallbackTimestamp = 1000L
+            1000L
         )
-        assertTrue(hallucinatedId.isSuccess)
-        assertEquals(10L, hallucinatedId.getOrThrow()[0].sourceMessageId)
+        assertTrue(validRes.isSuccess)
+        assertEquals(101L, validRes.getOrThrow()[0].sourceMessageId)
+
+        // 2. Missing source_message_id: FAIL
+        val missingId = useCase.parseCandidatesJsonStrict(
+            """[{"content": "I like running"}]""",
+            validSet,
+            1000L
+        )
+        assertTrue(missingId.isFailure)
+
+        // 3. source_message_id is null: FAIL
+        val nullId = useCase.parseCandidatesJsonStrict(
+            """[{"content": "I like running", "source_message_id": null}]""",
+            validSet,
+            1000L
+        )
+        assertTrue(nullId.isFailure)
+
+        // 4. source_message_id is string: FAIL
+        val stringId = useCase.parseCandidatesJsonStrict(
+            """[{"content": "I like running", "source_message_id": "101"}]""",
+            validSet,
+            1000L
+        )
+        assertTrue(stringId.isFailure)
+
+        // 5. source_message_id is float: FAIL
+        val floatId = useCase.parseCandidatesJsonStrict(
+            """[{"content": "I like running", "source_message_id": 101.5}]""",
+            validSet,
+            1000L
+        )
+        assertTrue(floatId.isFailure)
+
+        // 6. source_message_id does NOT belong to current batch: FAIL (NEVER guessed or replaced)
+        val outOfBatchId = useCase.parseCandidatesJsonStrict(
+            """[{"content": "I like running", "source_message_id": 99999}]""",
+            validSet,
+            1000L
+        )
+        assertTrue(outOfBatchId.isFailure)
+    }
+
+    @Test
+    fun `test ExtractCandidateMemoriesUseCase fails entirely and does not advance cursor or save when source_message_id is invalid`() = runTest {
+        val messageDao = mockk<MessageDao>()
+        val candidateRepo = mockk<CandidateMemoryRepository>(relaxed = true)
+        val aiRepository = mockk<AiRepository>()
+        val dataStore = mockk<DataStore<Preferences>>(relaxed = true)
+
+        val prefs = mockk<Preferences>()
+        every { prefs[PreferencesKeys.LAST_REVIEWED_MESSAGE_ID] } returns 10L
+        every { dataStore.data } returns flowOf(prefs)
+
+        val messages = listOf(
+            MessageEntity(id = 11L, content = "I like green tea", role = "USER", timestamp = 1000L)
+        )
+        coEvery { messageDao.getMessagesAfterId(10L) } returns messages
+        // AI returns hallucinated message ID 999
+        val aiJson = """[{"content": "User likes green tea", "source_message_id": 999}]"""
+        coEvery { aiRepository.sendMessageWithTools(any(), any(), any(), any(), any()) } returns
+                Result.success(AgentResponse.Text(aiJson))
+
+        val useCase = ExtractCandidateMemoriesUseCase(messageDao, candidateRepo, aiRepository, dataStore)
+        val result = useCase()
+
+        // Entire extraction must fail
+        assertTrue(result.isFailure)
+        // Nothing must be saved
+        coVerify(exactly = 0) { candidateRepo.saveCandidates(any()) }
+        // Cursor must NOT advance
+        coVerify(exactly = 0) { dataStore.updateData(any()) }
     }
 
     @Test
@@ -249,7 +364,6 @@ class DailyMemoryReviewTest {
         )
         coEvery { messageDao.getMessagesAfterId(10L) } returns messages
 
-        // Existing candidate in database for message 15
         val existingCandidate = CandidateMemory(
             id = 1L,
             content = "User name is Alice",
@@ -259,7 +373,6 @@ class DailyMemoryReviewTest {
         )
         coEvery { candidateRepo.getBySourceMessageIds(listOf(15L)) } returns listOf(existingCandidate)
 
-        // AI returns identical extraction result
         val aiJson = """[{"content": "User name is Alice", "topic": "name", "source_message_id": 15}]"""
         coEvery { aiRepository.sendMessageWithTools(any(), any(), any(), any(), any()) } returns
                 Result.success(AgentResponse.Text(aiJson))
@@ -268,7 +381,6 @@ class DailyMemoryReviewTest {
         val result = useCase()
 
         assertTrue(result.isSuccess)
-        // Since it's a duplicate, saveCandidates should not re-insert the existing item
         coVerify(exactly = 0) { candidateRepo.saveCandidates(any()) }
         coVerify(exactly = 1) { dataStore.updateData(any()) }
     }
@@ -326,5 +438,69 @@ class DailyMemoryReviewTest {
 
         assertTrue(result.isFailure)
         coVerify(exactly = 0) { dataStore.updateData(any()) }
+    }
+
+    // ── P1-2 LibraryViewModel Approval and Feedback Tests ─────────────────────
+
+    @Test
+    fun `test LibraryViewModel approveCandidate closes edit dialog and shows success on transaction success`() = runTest {
+        val memoryRepo = mockk<MemoryRepository>(relaxed = true)
+        val candidateRepo = mockk<CandidateMemoryRepository>(relaxed = true)
+        val extractUseCase = mockk<ExtractCandidateMemoriesUseCase>(relaxed = true)
+        val reviewUseCase = mockk<ReviewCandidateMemoryUseCase>()
+
+        val candidate = CandidateMemory(id = 10L, content = "Old content", topic = "topic")
+        coEvery {
+            reviewUseCase.approveCandidate(10L, "New edited content", "new_topic")
+        } returns Result.success(true)
+
+        val viewModel = LibraryViewModel(
+            mockk(relaxed = true), memoryRepo, candidateRepo, extractUseCase, reviewUseCase
+        )
+
+        // User starts editing
+        viewModel.startEditingCandidate(candidate)
+        assertNotNull(viewModel.uiState.value.editingCandidate)
+
+        // User saves successfully
+        viewModel.approveCandidate(candidate, "New edited content", "new_topic")
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        // Dialog should be dismissed, success message displayed, no error
+        assertNull(viewModel.uiState.value.editingCandidate)
+        assertNull(viewModel.uiState.value.error)
+        assertEquals("Memory approved and saved.", viewModel.uiState.value.infoMessage)
+    }
+
+    @Test
+    fun `test LibraryViewModel approveCandidate keeps dialog open, preserves edited content, and surfaces error on failure`() = runTest {
+        val memoryRepo = mockk<MemoryRepository>(relaxed = true)
+        val candidateRepo = mockk<CandidateMemoryRepository>(relaxed = true)
+        val extractUseCase = mockk<ExtractCandidateMemoriesUseCase>(relaxed = true)
+        val reviewUseCase = mockk<ReviewCandidateMemoryUseCase>()
+
+        val candidate = CandidateMemory(id = 10L, content = "Initial content", topic = "initial_topic")
+        coEvery {
+            reviewUseCase.approveCandidate(10L, "User edited content", "edited_topic")
+        } returns Result.failure(RuntimeException("Database lock error"))
+
+        val viewModel = LibraryViewModel(
+            mockk(relaxed = true), memoryRepo, candidateRepo, extractUseCase, reviewUseCase
+        )
+
+        // User starts editing
+        viewModel.startEditingCandidate(candidate)
+
+        // User saves but transaction fails
+        viewModel.approveCandidate(candidate, "User edited content", "edited_topic")
+        testDispatcher.scheduler.advanceUntilIdle()
+
+        // Dialog must REMAIN open
+        assertNotNull(viewModel.uiState.value.editingCandidate)
+        // User's edited content must be PRESERVED
+        assertEquals("User edited content", viewModel.uiState.value.editingCandidate?.content)
+        assertEquals("edited_topic", viewModel.uiState.value.editingCandidate?.topic)
+        // Error message must be surfaced
+        assertEquals("Database lock error", viewModel.uiState.value.error)
     }
 }

@@ -109,10 +109,10 @@ class ExtractCandidateMemoriesUseCase @Inject constructor(
         val validMessageIds = newMessages.map { it.id }.toSet()
 
         // Strictly distinguish valid JSON (including empty array []) vs JSON parse errors
+        // and strictly validate source_message_id against validMessageIds
         val candidates = parseCandidatesJsonStrict(
             rawText = text,
             validMessageIds = validMessageIds,
-            fallbackMessageId = newMessages.first().id,
             fallbackTimestamp = newMessages.last().timestamp
         ).getOrThrow()
 
@@ -149,7 +149,6 @@ class ExtractCandidateMemoriesUseCase @Inject constructor(
     fun parseCandidatesJsonStrict(
         rawText: String,
         validMessageIds: Set<Long> = emptySet(),
-        fallbackMessageId: Long,
         fallbackTimestamp: Long
     ): Result<List<CandidateMemory>> {
         val cleaned = rawText.replace(Regex("```[a-z]*\\s*"), "").replace("```", "").trim()
@@ -168,8 +167,11 @@ class ExtractCandidateMemoriesUseCase @Inject constructor(
 
         val results = mutableListOf<CandidateMemory>()
         for (i in 0 until array.length()) {
-            val obj = array.optJSONObject(i)
-                ?: return Result.failure(IllegalArgumentException("Item at index $i is not a valid JSON object"))
+            val optItem = array.opt(i)
+            if (optItem !is JSONObject) {
+                return Result.failure(IllegalArgumentException("Item at index $i is not a JSON object: $optItem"))
+            }
+            val obj = optItem
 
             if (!obj.has("content")) {
                 return Result.failure(IllegalArgumentException("Item at index $i is missing required 'content' field"))
@@ -193,13 +195,27 @@ class ExtractCandidateMemoriesUseCase @Inject constructor(
                     return Result.failure(IllegalArgumentException("Item at index $i has invalid source_type '$sourceStr'"))
                 }
 
-            // Validate source_message_id
-            val rawMsgId = obj.optLong("source_message_id", fallbackMessageId)
-            val finalMsgId = if (validMessageIds.isNotEmpty() && rawMsgId !in validMessageIds) {
-                // If model hallucinated an unknown message ID, anchor to fallbackMessageId
-                fallbackMessageId
-            } else {
-                rawMsgId
+            // Strict validation of source_message_id:
+            // Must be present, not null, an actual Long/Int (not string or float or missing), and in validMessageIds
+            if (!obj.has("source_message_id") || obj.isNull("source_message_id")) {
+                return Result.failure(IllegalArgumentException("Item at index $i is missing or null 'source_message_id'"))
+            }
+
+            val rawVal = obj.get("source_message_id")
+            val validatedMsgId: Long = when (rawVal) {
+                is Long -> rawVal
+                is Int -> rawVal.toLong()
+                else -> {
+                    return Result.failure(
+                        IllegalArgumentException("Item at index $i has invalid 'source_message_id' type: ${rawVal::class.java.simpleName}")
+                    )
+                }
+            }
+
+            if (validMessageIds.isNotEmpty() && validatedMsgId !in validMessageIds) {
+                return Result.failure(
+                    IllegalArgumentException("Item at index $i has source_message_id $validatedMsgId not belonging to current batch: $validMessageIds")
+                )
             }
 
             val sourceTs = obj.optLong("source_timestamp", fallbackTimestamp)
@@ -211,7 +227,7 @@ class ExtractCandidateMemoriesUseCase @Inject constructor(
                     originalSnippet = originalSnippet,
                     category = category,
                     sourceType = sourceType,
-                    sourceMessageId = finalMsgId,
+                    sourceMessageId = validatedMsgId,
                     sourceTimestamp = if (sourceTs > 0) sourceTs else fallbackTimestamp,
                     status = CandidateStatus.PENDING
                 )
