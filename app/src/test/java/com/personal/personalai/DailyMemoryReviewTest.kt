@@ -31,6 +31,7 @@ import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.resetMain
@@ -659,6 +660,121 @@ class DailyMemoryReviewTest {
             // Job 2 persists cursor 12
             dataStore.updateData(any())
         }
+    }
+
+    // ── Cancellation and Exception Propagation Tests for ExtractCandidateMemoriesUseCase ──
+
+    @Test
+    fun `test ExtractCandidateMemoriesUseCase rethrows CancellationException and terminates coroutine cleanly`() = runTest {
+        val messageDao = mockk<MessageDao>()
+        val candidateRepo = mockk<CandidateMemoryRepository>(relaxed = true)
+        val aiRepository = mockk<AiRepository>()
+        val dataStore = mockk<DataStore<Preferences>>()
+
+        val prefs = mockk<Preferences>()
+        every { prefs[PreferencesKeys.LAST_REVIEWED_MESSAGE_ID] } returns 10L
+        every { dataStore.data } returns flowOf(prefs)
+
+        val messages = listOf(
+            MessageEntity(id = 11L, content = "User statement", role = "USER", timestamp = 1000L)
+        )
+        coEvery { messageDao.getMessagesAfterId(10L) } returns messages
+
+        val aiCallStarted = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val postCancelCheck = kotlinx.coroutines.CompletableDeferred<Unit>()
+
+        coEvery { aiRepository.sendMessageWithTools(any(), any(), any(), any(), any()) } coAnswers {
+            aiCallStarted.complete(Unit)
+            kotlinx.coroutines.awaitCancellation()
+            postCancelCheck.complete(Unit)
+            Result.success(AgentResponse.Text("""[{"content": "fact", "source_message_id": 11}]"""))
+        }
+
+        val useCase = ExtractCandidateMemoriesUseCase(messageDao, candidateRepo, aiRepository, dataStore)
+
+        var cancellationPropagated = false
+        var resultFailureReturned = false
+
+        val job = backgroundScope.launch {
+            try {
+                val res = useCase()
+                if (res.isFailure) {
+                    resultFailureReturned = true
+                }
+            } catch (e: Throwable) {
+                if (e is kotlinx.coroutines.CancellationException) {
+                    cancellationPropagated = true
+                }
+                throw e
+            }
+        }
+
+        testScheduler.advanceUntilIdle()
+        aiCallStarted.await()
+
+        job.cancel()
+        testScheduler.advanceUntilIdle()
+
+        assertTrue("CancellationException must be rethrown and not converted into Result.failure", cancellationPropagated || job.isCancelled)
+        assertFalse("CancellationException must NOT be swallowed or returned as Result.failure", resultFailureReturned)
+        assertTrue("Coroutine job must be marked cancelled", job.isCancelled)
+        assertFalse("No subsequent operations should continue after cancellation", postCancelCheck.isCompleted)
+        coVerify(exactly = 0) { candidateRepo.saveCandidates(any()) }
+    }
+
+    @Test
+    fun `test ExtractCandidateMemoriesUseCase returns Result failure on ordinary exception without crashing`() = runTest {
+        val messageDao = mockk<MessageDao>()
+        val candidateRepo = mockk<CandidateMemoryRepository>(relaxed = true)
+        val aiRepository = mockk<AiRepository>()
+        val dataStore = mockk<DataStore<Preferences>>()
+
+        val prefs = mockk<Preferences>()
+        every { prefs[PreferencesKeys.LAST_REVIEWED_MESSAGE_ID] } returns 10L
+        every { dataStore.data } returns flowOf(prefs)
+
+        val messages = listOf(
+            MessageEntity(id = 11L, content = "User statement", role = "USER", timestamp = 1000L)
+        )
+        coEvery { messageDao.getMessagesAfterId(10L) } returns messages
+        coEvery { aiRepository.sendMessageWithTools(any(), any(), any(), any(), any()) } returns
+                Result.failure(java.io.IOException("Socket timeout"))
+
+        val useCase = ExtractCandidateMemoriesUseCase(messageDao, candidateRepo, aiRepository, dataStore)
+
+        val result = useCase()
+
+        assertTrue("Ordinary exception must be converted into Result.failure", result.isFailure)
+        assertTrue(result.exceptionOrNull() is java.io.IOException)
+        coVerify(exactly = 0) { candidateRepo.saveCandidates(any()) }
+    }
+
+    @Test
+    fun `test ExtractCandidateMemoriesUseCase returns Result success with correct candidate count`() = runTest {
+        val messageDao = mockk<MessageDao>()
+        val candidateRepo = mockk<CandidateMemoryRepository>(relaxed = true)
+        val aiRepository = mockk<AiRepository>()
+        val dataStore = mockk<DataStore<Preferences>>(relaxed = true)
+
+        val prefs = mockk<Preferences>()
+        every { prefs[PreferencesKeys.LAST_REVIEWED_MESSAGE_ID] } returns 10L
+        every { dataStore.data } returns flowOf(prefs)
+
+        val messages = listOf(
+            MessageEntity(id = 11L, content = "I like matcha", role = "USER", timestamp = 1000L)
+        )
+        coEvery { messageDao.getMessagesAfterId(10L) } returns messages
+        coEvery { candidateRepo.getBySourceMessageIds(any()) } returns emptyList()
+        coEvery { aiRepository.sendMessageWithTools(any(), any(), any(), any(), any()) } returns
+                Result.success(AgentResponse.Text("""[{"content": "Likes matcha", "source_message_id": 11}]"""))
+
+        val useCase = ExtractCandidateMemoriesUseCase(messageDao, candidateRepo, aiRepository, dataStore)
+
+        val result = useCase()
+
+        assertTrue("Successful extraction must return Result.success", result.isSuccess)
+        assertEquals("Expected extraction count must be 1", 1, result.getOrThrow())
+        coVerify(exactly = 1) { candidateRepo.saveCandidates(any()) }
     }
 
     // ── P1-2 LibraryViewModel Approval and Feedback Tests ─────────────────────

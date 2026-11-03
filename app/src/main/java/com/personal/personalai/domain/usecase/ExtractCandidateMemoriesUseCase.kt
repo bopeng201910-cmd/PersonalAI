@@ -13,6 +13,7 @@ import com.personal.personalai.domain.repository.AiRepository
 import com.personal.personalai.domain.repository.CandidateMemoryRepository
 import com.personal.personalai.domain.tools.AgentResponse
 import com.personal.personalai.presentation.settings.PreferencesKeys
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -38,9 +39,17 @@ class ExtractCandidateMemoriesUseCase @Inject constructor(
         private val DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")
     }
 
-    suspend operator fun invoke(): Result<Int> = runCatching {
-        extractionMutex.withLock {
-            performExtraction()
+    suspend operator fun invoke(): Result<Int> {
+        return try {
+            Result.success(
+                extractionMutex.withLock {
+                    performExtraction()
+                }
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
         }
     }
 
