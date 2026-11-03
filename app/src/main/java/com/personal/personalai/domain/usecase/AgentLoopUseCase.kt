@@ -19,6 +19,8 @@ import com.personal.personalai.domain.tools.ToolResult
 import com.personal.personalai.presentation.settings.PreferencesKeys
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -111,6 +113,7 @@ class AgentLoopUseCase @Inject constructor(
 
         // 4. Agent loop
         repeat(MAX_ITERATIONS) { iteration ->
+            currentCoroutineContext().ensureActive()
             val llmStartMs = SystemClock.elapsedRealtime()
             val effectiveTaskType = if (iteration > 0) {
                 com.personal.personalai.domain.router.LumioTaskType.TOOL_EXECUTION
@@ -118,9 +121,19 @@ class AgentLoopUseCase @Inject constructor(
                 baseTaskType
             }
 
-            var response = aiRepository.sendMessageWithTools(
+            val aiResult = aiRepository.sendMessageWithTools(
                 conversationItems, memories, tools, previousResponseId, effectiveTaskType
-            ).getOrNull()
+            )
+
+            // If cancelled, propagate CancellationException immediately
+            aiResult.exceptionOrNull()?.let { ex ->
+                if (ex is kotlinx.coroutines.CancellationException || ex is java.util.concurrent.CancellationException) {
+                    throw ex
+                }
+            }
+            currentCoroutineContext().ensureActive()
+
+            var response = aiResult.getOrNull()
 
             // Stale-chain fallback: if the very first call fails and we were
             // chaining, retry once cold. Only the first iteration is eligible
@@ -130,9 +143,16 @@ class AgentLoopUseCase @Inject constructor(
                 clearChainId()
                 previousResponseId = null
                 conversationItems = buildColdInput(backgroundMode, message)
-                response = aiRepository.sendMessageWithTools(
+                currentCoroutineContext().ensureActive()
+                val retryResult = aiRepository.sendMessageWithTools(
                     conversationItems, memories, tools, null, effectiveTaskType
-                ).getOrNull()
+                )
+                retryResult.exceptionOrNull()?.let { ex ->
+                    if (ex is kotlinx.coroutines.CancellationException || ex is java.util.concurrent.CancellationException) {
+                        throw ex
+                    }
+                }
+                response = retryResult.getOrNull()
             }
 
             if (response == null) {
@@ -154,12 +174,14 @@ class AgentLoopUseCase @Inject constructor(
                     // and only needs to send the tool outputs.
                     val nextChainId = response.responseId
                     val toolOutputs = JSONArray()
-                    response.calls.forEach { call ->
+                    for (call in response.calls) {
+                        currentCoroutineContext().ensureActive()
                         emit(AgentStep.ToolCalling(call.name, humanReadable(call.name, call.arguments)))
 
                         // Execute the tool
                         val toolStartMs = SystemClock.elapsedRealtime()
                         val rawResult = toolRegistry.execute(call.name, call.arguments)
+                        currentCoroutineContext().ensureActive()
                         Log.d(
                             TAG,
                             "iteration=${iteration + 1} tool=${call.name} rawToolMs=${SystemClock.elapsedRealtime() - toolStartMs} " +
@@ -174,8 +196,11 @@ class AgentLoopUseCase @Inject constructor(
                                 )
                             } else {
                                 val granted = permissionBroker.requestAndAwait(rawResult.permission)
+                                currentCoroutineContext().ensureActive()
                                 if (granted) {
-                                    toolRegistry.execute(call.name, call.arguments)
+                                    val retryToolResult = toolRegistry.execute(call.name, call.arguments)
+                                    currentCoroutineContext().ensureActive()
+                                    retryToolResult
                                 } else {
                                     ToolResult.Error(
                                         "User denied permission '${rawResult.permission}'. " +

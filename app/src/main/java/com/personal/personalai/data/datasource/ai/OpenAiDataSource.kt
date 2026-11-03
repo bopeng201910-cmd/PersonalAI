@@ -93,6 +93,10 @@ class OpenAiDataSource @Inject constructor(
             ) { responseBody ->
                 apiClient.parseAgentResponse(responseBody)
             }
+        } catch (cancellation: java.util.concurrent.CancellationException) {
+            throw cancellation
+        } catch (cancellation: kotlinx.coroutines.CancellationException) {
+            throw cancellation
         } catch (e: Exception) {
             Result.failure(e)
         }

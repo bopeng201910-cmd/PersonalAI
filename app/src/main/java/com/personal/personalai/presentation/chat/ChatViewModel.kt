@@ -17,6 +17,8 @@ import com.personal.personalai.domain.usecase.TranscribeAudioUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -38,6 +40,8 @@ class ChatViewModel @Inject constructor(
 
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
+
+    private var currentMessageJob: Job? = null
 
     init {
         observeMessages()
@@ -126,25 +130,54 @@ class ChatViewModel @Inject constructor(
             return
         }
 
-        if (_uiState.value.isLoading) return
+        // Cancel any active message generation before starting a new one
+        currentMessageJob?.cancel()
 
-        _uiState.update { it.copy(inputText = "", isLoading = true, error = null) }
+        _uiState.update { it.copy(inputText = "", isLoading = true, agentStatusMessage = null, error = null) }
 
-        viewModelScope.launch {
-            agentLoopUseCase(text, backgroundMode = false).collect { step ->
-                when (step) {
-                    is AgentStep.ToolCalling ->
-                        _uiState.update { it.copy(agentStatusMessage = step.humanReadable) }
-                    is AgentStep.Complete -> {
-                        _uiState.update {
-                            it.copy(isLoading = false, agentStatusMessage = null)
-                        }
-                        step.result.onFailure { e ->
-                            _uiState.update { it.copy(error = e.message) }
+        currentMessageJob = viewModelScope.launch {
+            try {
+                agentLoopUseCase(text, backgroundMode = false).collect { step ->
+                    when (step) {
+                        is AgentStep.ToolCalling ->
+                            _uiState.update { it.copy(agentStatusMessage = step.humanReadable) }
+                        is AgentStep.Complete -> {
+                            _uiState.update {
+                                it.copy(isLoading = false, agentStatusMessage = null)
+                            }
+                            step.result.onFailure { e ->
+                                _uiState.update { it.copy(error = e.message) }
+                            }
                         }
                     }
                 }
+            } catch (cancellation: CancellationException) {
+                // Reset loading and status on cancellation if this job is still the active job;
+                // do NOT surface an error message
+                if (currentMessageJob === coroutineContext[Job]) {
+                    _uiState.update {
+                        it.copy(isLoading = false, agentStatusMessage = null)
+                    }
+                }
+            } catch (e: Exception) {
+                if (currentMessageJob === coroutineContext[Job]) {
+                    _uiState.update {
+                        it.copy(isLoading = false, agentStatusMessage = null, error = e.message)
+                    }
+                }
             }
+        }
+    }
+
+    /**
+     * Cancels the active AI response/agent execution.
+     * Safely resets loading and progress status without displaying an error message.
+     */
+    fun cancelCurrentMessage() {
+        currentMessageJob?.cancel()
+        currentMessageJob = null
+        _uiState.update {
+            it.copy(isLoading = false, agentStatusMessage = null)
         }
     }
 

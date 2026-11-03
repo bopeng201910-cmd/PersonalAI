@@ -56,6 +56,10 @@ class LumioAiRouterImpl @Inject constructor(
     ): Result<AgentResponse> {
         return try {
             localLlmDataSource.sendMessageWithTools(conversationItems, memories, tools)
+        } catch (cancellation: java.util.concurrent.CancellationException) {
+            throw cancellation
+        } catch (cancellation: kotlinx.coroutines.CancellationException) {
+            throw cancellation
         } catch (oom: OutOfMemoryError) {
             Log.e(TAG, "Local model OOM during task $taskType! Refusing silent fallback to cloud.")
             Result.success(
