@@ -25,6 +25,7 @@ import com.personal.personalai.presentation.library.LibraryViewModel
 import com.personal.personalai.presentation.settings.PreferencesKeys
 import io.mockk.coEvery
 import io.mockk.coVerify
+import io.mockk.coVerifyOrder
 import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.Dispatchers
@@ -639,6 +640,25 @@ class DailyMemoryReviewTest {
 
         // 10. Verify there are no duplicate saves and neither message is lost
         assertEquals(2, savedCandidatesList.map { it.sourceMessageId }.distinct().size)
+
+        // 11. Verify exact chronological query sequence and cursor arguments
+        coVerify(exactly = 1) { messageDao.getMessagesAfterId(10L) }
+        coVerify(exactly = 1) { messageDao.getMessagesAfterId(11L) }
+
+        coVerifyOrder {
+            // Job 1 queries DB with initial cursor 10
+            messageDao.getMessagesAfterId(10L)
+            // Job 1 saves candidate from msg 11
+            candidateRepo.saveCandidates(match { it.any { c -> c.sourceMessageId == 11L } })
+            // Job 1 persists cursor 11
+            dataStore.updateData(any())
+            // Job 2 queries DB with updated cursor 11, discovering msg 12
+            messageDao.getMessagesAfterId(11L)
+            // Job 2 saves candidate from msg 12
+            candidateRepo.saveCandidates(match { it.any { c -> c.sourceMessageId == 12L } })
+            // Job 2 persists cursor 12
+            dataStore.updateData(any())
+        }
     }
 
     // ── P1-2 LibraryViewModel Approval and Feedback Tests ─────────────────────
