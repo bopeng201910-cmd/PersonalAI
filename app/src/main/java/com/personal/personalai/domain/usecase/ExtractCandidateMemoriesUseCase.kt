@@ -14,31 +14,43 @@ import com.personal.personalai.domain.repository.CandidateMemoryRepository
 import com.personal.personalai.domain.tools.AgentResponse
 import com.personal.personalai.presentation.settings.PreferencesKeys
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import javax.inject.Inject
+import javax.inject.Singleton
 
+@Singleton
 class ExtractCandidateMemoriesUseCase @Inject constructor(
     private val messageDao: MessageDao,
     private val candidateMemoryRepository: CandidateMemoryRepository,
     private val aiRepository: AiRepository,
     private val dataStore: DataStore<Preferences>
 ) {
+    private val extractionMutex = Mutex()
+
     companion object {
         private const val TAG = "ExtractCandidateMemories"
         private val DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")
     }
 
     suspend operator fun invoke(): Result<Int> = runCatching {
+        extractionMutex.withLock {
+            performExtraction()
+        }
+    }
+
+    private suspend fun performExtraction(): Int {
         val prefs = dataStore.data.first()
         val lastReviewedId = prefs[PreferencesKeys.LAST_REVIEWED_MESSAGE_ID] ?: 0L
 
         val newMessages = messageDao.getMessagesAfterId(lastReviewedId)
         if (newMessages.isEmpty()) {
-            return@runCatching 0
+            return 0
         }
 
         // Only process if there's at least one user message
@@ -47,7 +59,7 @@ class ExtractCandidateMemoriesUseCase @Inject constructor(
             // Update cursor since there's no user content to extract
             val maxId = newMessages.maxOf { it.id }
             dataStore.edit { it[PreferencesKeys.LAST_REVIEWED_MESSAGE_ID] = maxId }
-            return@runCatching 0
+            return 0
         }
 
         // Build conversation transcript
@@ -138,7 +150,7 @@ class ExtractCandidateMemoriesUseCase @Inject constructor(
             it[PreferencesKeys.LAST_REVIEWED_MESSAGE_ID] = newMaxId
         }
 
-        candidates.size
+        return candidates.size
     }
 
     /**

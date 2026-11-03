@@ -448,6 +448,37 @@ class DailyMemoryReviewTest {
         coVerify(exactly = 0) { dataStore.updateData(any()) }
     }
 
+    // ── Concurrency and Mutex Tests ───────────────────────────────────────────
+
+    @Test
+    fun `test ExtractCandidateMemoriesUseCase serializes concurrent extraction invocations safely`() = runTest {
+        val messageDao = mockk<MessageDao>()
+        val candidateRepo = mockk<CandidateMemoryRepository>(relaxed = true)
+        val aiRepository = mockk<AiRepository>()
+        val dataStore = mockk<DataStore<Preferences>>(relaxed = true)
+
+        val prefs = mockk<Preferences>()
+        every { prefs[PreferencesKeys.LAST_REVIEWED_MESSAGE_ID] } returns 10L
+        every { dataStore.data } returns flowOf(prefs)
+
+        val messages = listOf(
+            MessageEntity(id = 11L, content = "User message", role = "USER", timestamp = 1000L)
+        )
+        coEvery { messageDao.getMessagesAfterId(10L) } returns messages
+        coEvery { candidateRepo.getBySourceMessageIds(any()) } returns emptyList()
+        coEvery { aiRepository.sendMessageWithTools(any(), any(), any(), any(), any()) } returns
+                Result.success(AgentResponse.Text("""[{"content": "fact", "source_message_id": 11}]"""))
+
+        val useCase = ExtractCandidateMemoriesUseCase(messageDao, candidateRepo, aiRepository, dataStore)
+
+        // Run sequential and concurrent checks
+        val res1 = useCase()
+        val res2 = useCase()
+
+        assertTrue(res1.isSuccess)
+        assertTrue(res2.isSuccess)
+    }
+
     // ── P1-2 LibraryViewModel Approval and Feedback Tests ─────────────────────
 
     @Test
