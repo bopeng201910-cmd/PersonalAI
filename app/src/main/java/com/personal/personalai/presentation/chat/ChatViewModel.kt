@@ -42,6 +42,8 @@ class ChatViewModel @Inject constructor(
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
 
     private var currentMessageJob: Job? = null
+    internal var memoryReviewJob: Job? = null
+        private set
 
     init {
         observeMessages()
@@ -52,7 +54,7 @@ class ChatViewModel @Inject constructor(
     }
 
     private fun checkNewMessagesForMemoryReview() {
-        viewModelScope.launch {
+        memoryReviewJob = viewModelScope.launch {
             // Background scan for any new unreviewed messages upon app launch
             try {
                 extractCandidateMemoriesUseCase()

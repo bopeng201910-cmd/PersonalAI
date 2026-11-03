@@ -366,10 +366,10 @@ class AgentLoopCancellationTest {
         every { permissionBroker.incoming } returns MutableSharedFlow()
         coEvery { candidateMemoryRepo.getPendingCandidateMemories() } returns flowOf(emptyList())
 
-        // 1. Generic Exception should be caught and logged without crashing the application
-        coEvery { extractCandidateMemoriesUseCase() } throws RuntimeException("Network down")
+        // 1. Verify that ordinary extraction exceptions are caught and logged without crashing the ViewModel
+        coEvery { extractCandidateMemoriesUseCase() } throws RuntimeException("Database error")
 
-        val viewModel = ChatViewModel(
+        val errorViewModel = ChatViewModel(
             agentLoopUseCase,
             getChatHistoryUseCase,
             transcribeAudioUseCase,
@@ -382,38 +382,48 @@ class AgentLoopCancellationTest {
         )
         testScheduler.advanceUntilIdle()
 
-        // Verify the use case was invoked and generic error didn't crash
         coVerify(atLeast = 1) { extractCandidateMemoriesUseCase() }
+        assertNull(errorViewModel.uiState.value.error)
+        assertTrue(errorViewModel.memoryReviewJob!!.isCompleted)
+        assertFalse(errorViewModel.memoryReviewJob!!.isCancelled)
 
-        // 2. CancellationException must be rethrown and not swallowed by runCatching
+        // 2. Verify that CancellationException is NOT swallowed by the actual production ChatViewModel coroutine
         val suspendBarrier = CompletableDeferred<Unit>()
+        val postCancelCheck = CompletableDeferred<Unit>()
+
         coEvery { extractCandidateMemoriesUseCase() } coAnswers {
-            suspendBarrier.await()
+            suspendBarrier.complete(Unit)
+            kotlinx.coroutines.awaitCancellation()
+            postCancelCheck.complete(Unit)
             Result.success(0)
         }
 
-        var cancellationPropagated = false
-        val job = launch {
-            try {
-                // Replicate the exact body of checkNewMessagesForMemoryReview
-                try {
-                    extractCandidateMemoriesUseCase()
-                } catch (e: CancellationException) {
-                    cancellationPropagated = true
-                    throw e
-                } catch (e: Exception) {
-                    // Logged
-                }
-            } catch (e: CancellationException) {
-                // Expected to escape
-            }
-        }
+        val cancelViewModel = ChatViewModel(
+            agentLoopUseCase,
+            getChatHistoryUseCase,
+            transcribeAudioUseCase,
+            audioRecorder,
+            userInputBroker,
+            permissionBroker,
+            candidateMemoryRepo,
+            extractCandidateMemoriesUseCase,
+            context
+        )
 
         testScheduler.advanceUntilIdle()
-        job.cancel()
+        suspendBarrier.await()
+
+        val actualJob = cancelViewModel.memoryReviewJob
+        org.junit.Assert.assertNotNull("Production memoryReviewJob must be running", actualJob)
+        assertTrue("Production memoryReviewJob must be active", actualJob!!.isActive)
+
+        // Cancel the actual production launched coroutine
+        actualJob.cancel()
         testScheduler.advanceUntilIdle()
 
-        assertTrue("CancellationException must be rethrown and not swallowed", cancellationPropagated)
-        assertTrue("Job must be cancelled", job.isCancelled)
+        // Verify the coroutine was actually cancelled and cancellation was not swallowed
+        assertTrue("Production memoryReviewJob must be marked cancelled", actualJob.isCancelled)
+        assertFalse("Extraction should not continue after cancellation", postCancelCheck.isCompleted)
+        assertNull("Cancellation should not set error state", cancelViewModel.uiState.value.error)
     }
 }
