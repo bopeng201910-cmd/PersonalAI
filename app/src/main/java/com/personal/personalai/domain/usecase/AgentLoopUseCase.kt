@@ -103,11 +103,23 @@ class AgentLoopUseCase @Inject constructor(
             buildColdInput(backgroundMode, message)
         }
 
+        val baseTaskType = if (backgroundMode) {
+            com.personal.personalai.domain.router.LumioTaskType.BACKGROUND_REMINDER
+        } else {
+            com.personal.personalai.domain.router.LumioTaskType.CHAT
+        }
+
         // 4. Agent loop
         repeat(MAX_ITERATIONS) { iteration ->
             val llmStartMs = SystemClock.elapsedRealtime()
+            val effectiveTaskType = if (iteration > 0) {
+                com.personal.personalai.domain.router.LumioTaskType.TOOL_EXECUTION
+            } else {
+                baseTaskType
+            }
+
             var response = aiRepository.sendMessageWithTools(
-                conversationItems, memories, tools, previousResponseId
+                conversationItems, memories, tools, previousResponseId, effectiveTaskType
             ).getOrNull()
 
             // Stale-chain fallback: if the very first call fails and we were
@@ -119,7 +131,7 @@ class AgentLoopUseCase @Inject constructor(
                 previousResponseId = null
                 conversationItems = buildColdInput(backgroundMode, message)
                 response = aiRepository.sendMessageWithTools(
-                    conversationItems, memories, tools, null
+                    conversationItems, memories, tools, null, effectiveTaskType
                 ).getOrNull()
             }
 

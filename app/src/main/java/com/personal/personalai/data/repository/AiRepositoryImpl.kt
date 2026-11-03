@@ -18,7 +18,7 @@ import javax.inject.Inject
 /**
  * Central [AiRepository] implementation.
  * All model text/tool invocations are strictly routed through [LumioAiRouter] to enforce
- * local-first policies, cloud permission gating, privacy sanitization, and cost controls.
+ * single-gateway governance, local-first policies, and task tracking.
  */
 class AiRepositoryImpl @Inject constructor(
     private val lumioAiRouter: LumioAiRouter,
@@ -31,13 +31,14 @@ class AiRepositoryImpl @Inject constructor(
         memories: List<Memory>,
         tools: List<AgentTool>,
         previousResponseId: String?,
+        taskType: LumioTaskType
     ): Result<AgentResponse> {
         return lumioAiRouter.routeAndExecute(
             conversationItems = conversationItems,
             memories = memories,
             tools = tools,
             previousResponseId = previousResponseId,
-            taskType = LumioTaskType.CHAT
+            taskType = taskType
         )
     }
 

@@ -177,7 +177,7 @@ class DailyMemoryReviewTest {
             MessageEntity(id = 11L, content = "I like matcha tea", role = "USER", timestamp = 1000L)
         )
         coEvery { messageDao.getMessagesAfterId(10L) } returns messages
-        coEvery { aiRepository.sendMessageWithTools(any(), any(), any(), any()) } returns
+        coEvery { aiRepository.sendMessageWithTools(any(), any(), any(), any(), any()) } returns
                 Result.success(AgentResponse.Text("This is not valid JSON!"))
 
         val useCase = ExtractCandidateMemoriesUseCase(messageDao, candidateRepo, aiRepository, dataStore)
@@ -203,7 +203,7 @@ class DailyMemoryReviewTest {
             MessageEntity(id = 12L, content = "Good morning! How can I help?", role = "ASSISTANT", timestamp = 1005L)
         )
         coEvery { messageDao.getMessagesAfterId(10L) } returns messages
-        coEvery { aiRepository.sendMessageWithTools(any(), any(), any(), any()) } returns
+        coEvery { aiRepository.sendMessageWithTools(any(), any(), any(), any(), any()) } returns
                 Result.success(AgentResponse.Text("[]"))
 
         val useCase = ExtractCandidateMemoriesUseCase(messageDao, candidateRepo, aiRepository, dataStore)
@@ -242,7 +242,7 @@ class DailyMemoryReviewTest {
 
         // AI returns identical extraction result
         val aiJson = """[{"content": "User name is Alice", "topic": "name", "source_message_id": 15}]"""
-        coEvery { aiRepository.sendMessageWithTools(any(), any(), any(), any()) } returns
+        coEvery { aiRepository.sendMessageWithTools(any(), any(), any(), any(), any()) } returns
                 Result.success(AgentResponse.Text(aiJson))
 
         val useCase = ExtractCandidateMemoriesUseCase(messageDao, candidateRepo, aiRepository, dataStore)
@@ -269,7 +269,7 @@ class DailyMemoryReviewTest {
             MessageEntity(id = 11L, content = "Offline conversation", role = "USER", timestamp = 1000L)
         )
         coEvery { messageDao.getMessagesAfterId(10L) } returns messages
-        coEvery { aiRepository.sendMessageWithTools(any(), any(), any(), any()) } returns
+        coEvery { aiRepository.sendMessageWithTools(any(), any(), any(), any(), any()) } returns
                 Result.failure(java.net.ConnectException("Network unreachable or local server down"))
 
         val useCase = ExtractCandidateMemoriesUseCase(messageDao, candidateRepo, aiRepository, dataStore)
@@ -299,7 +299,7 @@ class DailyMemoryReviewTest {
         coEvery { candidateRepo.saveCandidates(any()) } throws android.database.sqlite.SQLiteFullException("Disk full")
 
         val aiJson = """[{"content": "User likes apples", "topic": "fruit", "source_message_id": 11}]"""
-        coEvery { aiRepository.sendMessageWithTools(any(), any(), any(), any()) } returns
+        coEvery { aiRepository.sendMessageWithTools(any(), any(), any(), any(), any()) } returns
                 Result.success(AgentResponse.Text(aiJson))
 
         val useCase = ExtractCandidateMemoriesUseCase(messageDao, candidateRepo, aiRepository, dataStore)

@@ -24,7 +24,6 @@ import com.personal.personalai.data.local.dao.MessageDao
 import com.personal.personalai.data.local.dao.ScheduledTaskDao
 import com.personal.personalai.data.audio.AudioRecorderImpl
 import com.personal.personalai.data.datasource.ai.LocalLlmDataSource
-import com.personal.personalai.data.network.PrivacyNetworkInterceptor
 import com.personal.personalai.data.repository.AiRepositoryImpl
 import com.personal.personalai.data.repository.ApiUsageRepositoryImpl
 import com.personal.personalai.data.repository.CandidateMemoryRepositoryImpl
@@ -145,12 +144,11 @@ object DatabaseModule {
 
     @Provides
     @Singleton
-    fun provideOkHttpClient(privacyNetworkInterceptor: PrivacyNetworkInterceptor): OkHttpClient =
+    fun provideOkHttpClient(): OkHttpClient =
         OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
-            .addInterceptor(privacyNetworkInterceptor)
             .build()
 }
 

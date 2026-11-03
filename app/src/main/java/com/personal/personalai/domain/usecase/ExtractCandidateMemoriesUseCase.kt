@@ -95,7 +95,8 @@ class ExtractCandidateMemoriesUseCase @Inject constructor(
             conversationItems = conversationItems,
             memories = emptyList(),
             tools = emptyList(),
-            previousResponseId = null
+            previousResponseId = null,
+            taskType = com.personal.personalai.domain.router.LumioTaskType.DAILY_REVIEW
         )
 
         val response = aiResult.getOrThrow()

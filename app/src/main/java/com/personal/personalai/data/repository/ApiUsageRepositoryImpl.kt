@@ -19,16 +19,5 @@ class ApiUsageRepositoryImpl @Inject constructor(
     override suspend fun logCall(log: ApiUsageLog): Long =
         dao.insertLog(log.toEntity())
 
-    override suspend fun getCurrentMonthCostUsd(): Double {
-        val calendar = java.util.Calendar.getInstance().apply {
-            set(java.util.Calendar.DAY_OF_MONTH, 1)
-            set(java.util.Calendar.HOUR_OF_DAY, 0)
-            set(java.util.Calendar.MINUTE, 0)
-            set(java.util.Calendar.SECOND, 0)
-            set(java.util.Calendar.MILLISECOND, 0)
-        }
-        return dao.getCostSince(calendar.timeInMillis)
-    }
-
     override suspend fun clearAllLogs() = dao.clearAll()
 }
