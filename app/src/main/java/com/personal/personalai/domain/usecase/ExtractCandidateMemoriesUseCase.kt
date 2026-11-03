@@ -212,7 +212,7 @@ class ExtractCandidateMemoriesUseCase @Inject constructor(
                 }
             }
 
-            if (validMessageIds.isNotEmpty() && validatedMsgId !in validMessageIds) {
+            if (validatedMsgId !in validMessageIds) {
                 return Result.failure(
                     IllegalArgumentException("Item at index $i has source_message_id $validatedMsgId not belonging to current batch: $validMessageIds")
                 )

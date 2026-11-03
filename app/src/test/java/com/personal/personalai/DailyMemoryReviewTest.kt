@@ -224,7 +224,15 @@ class DailyMemoryReviewTest {
         assertTrue(validRes.isSuccess)
         assertEquals(101L, validRes.getOrThrow()[0].sourceMessageId)
 
-        // 2. Missing source_message_id: FAIL
+        // 2. validMessageIds is EMPTY: FAIL unconditionally
+        val emptyBatchRes = useCase.parseCandidatesJsonStrict(
+            """[{"content": "I like running", "source_message_id": 101}]""",
+            emptySet(),
+            1000L
+        )
+        assertTrue(emptyBatchRes.isFailure)
+
+        // 3. Missing source_message_id: FAIL
         val missingId = useCase.parseCandidatesJsonStrict(
             """[{"content": "I like running"}]""",
             validSet,
@@ -232,7 +240,7 @@ class DailyMemoryReviewTest {
         )
         assertTrue(missingId.isFailure)
 
-        // 3. source_message_id is null: FAIL
+        // 4. source_message_id is null: FAIL
         val nullId = useCase.parseCandidatesJsonStrict(
             """[{"content": "I like running", "source_message_id": null}]""",
             validSet,
@@ -240,7 +248,7 @@ class DailyMemoryReviewTest {
         )
         assertTrue(nullId.isFailure)
 
-        // 4. source_message_id is string: FAIL
+        // 5. source_message_id is string: FAIL
         val stringId = useCase.parseCandidatesJsonStrict(
             """[{"content": "I like running", "source_message_id": "101"}]""",
             validSet,
@@ -248,7 +256,7 @@ class DailyMemoryReviewTest {
         )
         assertTrue(stringId.isFailure)
 
-        // 5. source_message_id is float: FAIL
+        // 6. source_message_id is float: FAIL
         val floatId = useCase.parseCandidatesJsonStrict(
             """[{"content": "I like running", "source_message_id": 101.5}]""",
             validSet,
@@ -256,7 +264,7 @@ class DailyMemoryReviewTest {
         )
         assertTrue(floatId.isFailure)
 
-        // 6. source_message_id does NOT belong to current batch: FAIL (NEVER guessed or replaced)
+        // 7. source_message_id does NOT belong to current batch: FAIL (NEVER guessed or replaced)
         val outOfBatchId = useCase.parseCandidatesJsonStrict(
             """[{"content": "I like running", "source_message_id": 99999}]""",
             validSet,
