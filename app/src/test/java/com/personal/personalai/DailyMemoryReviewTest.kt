@@ -550,17 +550,26 @@ class DailyMemoryReviewTest {
         val msg11 = MessageEntity(id = 11L, content = "User likes tea", role = "USER", timestamp = 1000L)
         val msg12 = MessageEntity(id = 12L, content = "User likes coffee", role = "USER", timestamp = 2000L)
 
-        // Initial state: cursor is 10, msg11 is available
-        coEvery { messageDao.getMessagesAfterId(10L) } returns listOf(msg11)
-        // Second call: cursor becomes 11 via DataStore update, msg12 arrived during Job 1
-        coEvery { messageDao.getMessagesAfterId(11L) } returns listOf(msg12)
+        // 1. Initially, only msg11 exists in the simulated message database
+        val inMemoryMessages = mutableListOf(msg11)
+        coEvery { messageDao.getMessagesAfterId(any()) } answers {
+            val afterId = firstArg<Long>()
+            inMemoryMessages.filter { it.id > afterId }
+        }
 
         coEvery { candidateRepo.getBySourceMessageIds(any()) } returns emptyList()
+
+        val savedCandidatesList = mutableListOf<CandidateMemory>()
+        coEvery { candidateRepo.saveCandidates(any()) } coAnswers {
+            val list = firstArg<List<CandidateMemory>>()
+            savedCandidatesList.addAll(list)
+            list.mapIndexed { idx, _ -> idx.toLong() + 1L }
+        }
 
         val job1Entered = kotlinx.coroutines.CompletableDeferred<Unit>()
         val job1Proceed = kotlinx.coroutines.CompletableDeferred<Unit>()
 
-        // Notice: AI mocks do NOT touch or modify DataStore cursor at all!
+        // AI Mock for batch with msg 11
         coEvery {
             aiRepository.sendMessageWithTools(
                 conversationItems = match { it.toString().contains("User likes tea") },
@@ -572,6 +581,7 @@ class DailyMemoryReviewTest {
             Result.success(AgentResponse.Text("""[{"content": "Likes tea", "source_message_id": 11}]"""))
         }
 
+        // AI Mock for batch with msg 12
         coEvery {
             aiRepository.sendMessageWithTools(
                 conversationItems = match { it.toString().contains("User likes coffee") },
@@ -581,20 +591,29 @@ class DailyMemoryReviewTest {
 
         val useCase = ExtractCandidateMemoriesUseCase(messageDao, candidateRepo, aiRepository, dataStore)
 
+        // 2. Launch Job 1 and wait until its AI call is suspended inside the Mutex critical section
         val job1 = async { useCase() }
         job1Entered.await()
 
+        // 3. While Job 1 is suspended, dynamically insert message 12 into the database.
+        // It was NOT preconfigured or available when Job 1 queried or started.
+        inMemoryMessages.add(msg12)
+
+        // 4. Launch Job 2 while Job 1 still holds the Mutex
         val job2 = async { useCase() }
         testScheduler.advanceUntilIdle()
 
-        assertFalse("Job 1 is running", job1.isCompleted)
-        assertFalse("Job 2 is waiting on Mutex", job2.isCompleted)
+        // 5. Verify Job 2 cannot complete while Job 1 is holding the Mutex
+        assertFalse("Job 1 is running inside critical section", job1.isCompleted)
+        assertFalse("Job 2 is suspended waiting for Mutex", job2.isCompleted)
 
+        // 6. Release Job 1. Production code persists cursor 11 through DataStore
         job1Proceed.complete(Unit)
         testScheduler.advanceUntilIdle()
 
-        assertTrue(job1.isCompleted)
-        assertTrue(job2.isCompleted)
+        // 7. Job 2 acquires Mutex, queries messages after 11, finds message 12, and completes
+        assertTrue("Job 1 completed", job1.isCompleted)
+        assertTrue("Job 2 completed", job2.isCompleted)
 
         val res1 = job1.await()
         val res2 = job2.await()
@@ -604,11 +623,22 @@ class DailyMemoryReviewTest {
         assertTrue(res2.isSuccess)
         assertEquals(1, res2.getOrThrow())
 
-        // Verify DataStore cursor was realistically advanced to 12 by the production code
+        // 8. Verify the final persisted cursor is 12
         assertEquals(12L, storedPrefs[PreferencesKeys.LAST_REVIEWED_MESSAGE_ID])
 
-        // Verify candidate saves: exactly 2 distinct candidates saved without loss or duplication
-        coVerify(exactly = 2) { candidateRepo.saveCandidates(any()) }
+        // 9. Verify exactly two distinct candidates were saved with correct contents and sourceMessageIds
+        assertEquals("Exactly two candidate memories must be saved", 2, savedCandidatesList.size)
+
+        val candidate1 = savedCandidatesList.first { it.sourceMessageId == 11L }
+        assertEquals("Likes tea", candidate1.content)
+        assertEquals(11L, candidate1.sourceMessageId)
+
+        val candidate2 = savedCandidatesList.first { it.sourceMessageId == 12L }
+        assertEquals("Likes coffee", candidate2.content)
+        assertEquals(12L, candidate2.sourceMessageId)
+
+        // 10. Verify there are no duplicate saves and neither message is lost
+        assertEquals(2, savedCandidatesList.map { it.sourceMessageId }.distinct().size)
     }
 
     // ── P1-2 LibraryViewModel Approval and Feedback Tests ─────────────────────
