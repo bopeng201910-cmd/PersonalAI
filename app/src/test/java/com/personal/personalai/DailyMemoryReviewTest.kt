@@ -665,6 +665,53 @@ class DailyMemoryReviewTest {
     // ── Cancellation and Exception Propagation Tests for ExtractCandidateMemoriesUseCase ──
 
     @Test
+    fun `test ExtractCandidateMemoriesUseCase directly rethrows CancellationException thrown by dependency`() = runTest {
+        val messageDao = mockk<MessageDao>()
+        val candidateRepo = mockk<CandidateMemoryRepository>(relaxed = true)
+        val aiRepository = mockk<AiRepository>()
+        val dataStore = mockk<DataStore<Preferences>>()
+
+        val prefs = mockk<Preferences>()
+        every { prefs[PreferencesKeys.LAST_REVIEWED_MESSAGE_ID] } returns 10L
+        every { dataStore.data } returns flowOf(prefs)
+
+        val messages = listOf(
+            MessageEntity(id = 11L, content = "User statement", role = "USER", timestamp = 1000L)
+        )
+        coEvery { messageDao.getMessagesAfterId(10L) } returns messages
+
+        // 1. Dependency throws CancellationException directly while parent coroutine is active
+        val thrownCancellation = kotlinx.coroutines.CancellationException("Direct cancellation from AI dependency")
+        coEvery { aiRepository.sendMessageWithTools(any(), any(), any(), any(), any()) } throws thrownCancellation
+
+        val useCase = ExtractCandidateMemoriesUseCase(messageDao, candidateRepo, aiRepository, dataStore)
+
+        var cancellationPropagated: Throwable? = null
+        var returnedResult: Result<Int>? = null
+
+        // 2. Launch real use case in controlled child coroutine
+        val childJob = launch {
+            try {
+                returnedResult = useCase()
+            } catch (e: Throwable) {
+                cancellationPropagated = e
+                throw e
+            }
+        }
+
+        testScheduler.advanceUntilIdle()
+
+        // 3. Assert parent remains active, child completes as cancelled, and cancellation was rethrown
+        assertTrue("Child coroutine must complete as cancelled", childJob.isCancelled)
+        assertNotNull("CancellationException must be captured when propagated", cancellationPropagated)
+        assertTrue("Propagated exception must be CancellationException", cancellationPropagated is kotlinx.coroutines.CancellationException)
+        assertEquals("Direct cancellation from AI dependency", cancellationPropagated?.message)
+        assertNull("Cancellation must never be returned as Result.failure", returnedResult)
+        coVerify(exactly = 0) { candidateRepo.saveCandidates(any()) }
+        coVerify(exactly = 0) { dataStore.updateData(any()) }
+    }
+
+    @Test
     fun `test ExtractCandidateMemoriesUseCase rethrows CancellationException and terminates coroutine cleanly`() = runTest {
         val messageDao = mockk<MessageDao>()
         val candidateRepo = mockk<CandidateMemoryRepository>(relaxed = true)

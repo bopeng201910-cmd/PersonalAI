@@ -44,6 +44,9 @@ class ChatViewModel @Inject constructor(
     private var currentMessageJob: Job? = null
     internal var memoryReviewJob: Job? = null
         private set
+    internal var currentTranscriptionJob: Job? = null
+        private set
+    private var transcriptionRequestId = 0L
 
     init {
         observeMessages()
@@ -188,7 +191,9 @@ class ChatViewModel @Inject constructor(
     // ── Voice recording ──────────────────────────────────────────────────────
 
     fun onRecordStart() {
-        if (_uiState.value.voiceState != VoiceState.IDLE) return
+        if (_uiState.value.voiceState == VoiceState.RECORDING) return
+        // Cancel any active transcription before starting a new recording
+        cancelTranscription()
         try {
             audioRecorder.start()
             _uiState.update { it.copy(voiceState = VoiceState.RECORDING) }
@@ -204,24 +209,53 @@ class ChatViewModel @Inject constructor(
             _uiState.update { it.copy(voiceState = VoiceState.IDLE) }
             return
         }
+
+        // Cancel previous transcription before setting state and launching
+        currentTranscriptionJob?.cancel()
         _uiState.update { it.copy(voiceState = VoiceState.TRANSCRIBING) }
-        viewModelScope.launch {
-            transcribeAudioUseCase(file)
-                .onSuccess { text ->
-                    _uiState.update { it.copy(voiceState = VoiceState.IDLE, inputText = text) }
+
+        val activeRequestId = ++transcriptionRequestId
+
+        currentTranscriptionJob = viewModelScope.launch {
+            try {
+                val result = transcribeAudioUseCase(file)
+                if (activeRequestId == transcriptionRequestId) {
+                    result.onSuccess { text ->
+                        _uiState.update { it.copy(voiceState = VoiceState.IDLE, inputText = text) }
+                    }.onFailure { e ->
+                        Log.e(TAG, "Transcription failed: ${e.message}", e)
+                        _uiState.update { it.copy(voiceState = VoiceState.IDLE, error = e.message) }
+                    }
                 }
-                .onFailure { e ->
+            } catch (cancellation: CancellationException) {
+                if (activeRequestId == transcriptionRequestId) {
+                    _uiState.update { it.copy(voiceState = VoiceState.IDLE) }
+                }
+                throw cancellation
+            } catch (e: Exception) {
+                if (activeRequestId == transcriptionRequestId) {
                     Log.e(TAG, "Transcription failed: ${e.message}", e)
                     _uiState.update { it.copy(voiceState = VoiceState.IDLE, error = e.message) }
                 }
-            file.delete()
+            } finally {
+                file.delete()
+            }
         }
     }
 
     fun onRecordCancel() {
         if (_uiState.value.voiceState != VoiceState.RECORDING) return
         audioRecorder.stop()?.delete()
+        cancelTranscription()
         _uiState.update { it.copy(voiceState = VoiceState.IDLE) }
+    }
+
+    fun cancelTranscription() {
+        currentTranscriptionJob?.cancel()
+        currentTranscriptionJob = null
+        if (_uiState.value.voiceState == VoiceState.TRANSCRIBING) {
+            _uiState.update { it.copy(voiceState = VoiceState.IDLE) }
+        }
     }
 
     fun onMicPermissionDenied() {
@@ -234,6 +268,9 @@ class ChatViewModel @Inject constructor(
 
     override fun onCleared() {
         super.onCleared()
+        currentMessageJob?.cancel()
+        currentTranscriptionJob?.cancel()
+        memoryReviewJob?.cancel()
         audioRecorder.release()
     }
 
