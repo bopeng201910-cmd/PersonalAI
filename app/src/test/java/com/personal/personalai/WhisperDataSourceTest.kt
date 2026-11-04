@@ -151,7 +151,7 @@ class WhisperDataSourceTest {
     }
 
     @Test
-    fun `test late callback after cancellation does not crash or throw double resume`() = runTest {
+    fun `test late callback after cancellation does not crash or throw double resume and closes response body`() = runTest {
         val callbackSlot = slot<Callback>()
         val enqueueInvoked = CompletableDeferred<Unit>()
 
@@ -169,13 +169,24 @@ class WhisperDataSourceTest {
         enqueueInvoked.await()
         deferred.cancelAndJoin()
 
+        var responseBodyClosed = false
+        val trackingBody = object : okhttp3.ResponseBody() {
+            override fun contentType() = "application/json".toMediaType()
+            override fun contentLength() = 10L
+            override fun source(): okio.BufferedSource = okio.Buffer().writeUtf8("""{"text": "Late"}""")
+            override fun close() {
+                responseBodyClosed = true
+                super.close()
+            }
+        }
+
         // Invoke callback AFTER cancellation to simulate race condition
         val lateResponse = Response.Builder()
             .request(Request.Builder().url("https://api.openai.com/v1/audio/transcriptions").build())
             .protocol(Protocol.HTTP_1_1)
             .code(200)
             .message("OK")
-            .body("""{"text": "Late arrival"}""".toResponseBody("application/json".toMediaType()))
+            .body(trackingBody)
             .build()
 
         // Should safely close response without throwing IllegalStateException from double-resume
@@ -183,6 +194,38 @@ class WhisperDataSourceTest {
         callbackSlot.captured.onFailure(mockHttpCall, IOException("Late error"))
 
         assertTrue("Coroutine must remain cancelled", deferred.isCancelled)
+        assertTrue("Late response body must be closed immediately upon race condition", responseBodyClosed)
+        tempAudio.delete()
+    }
+
+    @Test
+    fun `test logCall rethrows CancellationException directly`() = runTest {
+        val callbackSlot = slot<Callback>()
+
+        every { mockHttpCall.enqueue(capture(callbackSlot)) } answers {
+            val response = Response.Builder()
+                .request(Request.Builder().url("https://api.openai.com/v1/audio/transcriptions").build())
+                .protocol(Protocol.HTTP_1_1)
+                .code(200)
+                .message("OK")
+                .body("""{"text": "Hello"}""".toResponseBody("application/json".toMediaType()))
+                .build()
+            callbackSlot.captured.onResponse(mockHttpCall, response)
+        }
+
+        io.mockk.coEvery { apiUsageRepository.logCall(any()) } throws kotlinx.coroutines.CancellationException("Logging cancelled")
+
+        val tempAudio = File.createTempFile("whisper_log_cancel", ".m4a")
+        val dataSource = WhisperDataSource(okHttpClient, apiUsageRepository)
+
+        var cancellationThrown = false
+        try {
+            dataSource.transcribe("test-key", tempAudio)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            cancellationThrown = true
+        }
+
+        assertTrue("CancellationException in logCall must propagate and not be swallowed", cancellationThrown)
         tempAudio.delete()
     }
 }

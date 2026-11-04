@@ -6,12 +6,14 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.personal.personalai.data.local.dao.ApiUsageLogDao
 import com.personal.personalai.data.local.dao.CandidateMemoryDao
+import com.personal.personalai.data.local.dao.ConversationDao
 import com.personal.personalai.data.local.dao.GeofenceTaskDao
 import com.personal.personalai.data.local.dao.MemoryDao
 import com.personal.personalai.data.local.dao.MessageDao
 import com.personal.personalai.data.local.dao.ScheduledTaskDao
 import com.personal.personalai.data.local.entity.ApiUsageLogEntity
 import com.personal.personalai.data.local.entity.CandidateMemoryEntity
+import com.personal.personalai.data.local.entity.ConversationEntity
 import com.personal.personalai.data.local.entity.GeofenceTaskEntity
 import com.personal.personalai.data.local.entity.MemoryEntity
 import com.personal.personalai.data.local.entity.MessageEntity
@@ -123,6 +125,31 @@ val MIGRATION_7_8 = object : Migration(7, 8) {
     }
 }
 
+val MIGRATION_8_9 = object : Migration(8, 9) {
+    override fun migrate(database: SupportSQLiteDatabase) {
+        database.execSQL(
+            """
+            CREATE TABLE IF NOT EXISTS `conversations` (
+                `id` TEXT PRIMARY KEY NOT NULL,
+                `title` TEXT NOT NULL,
+                `createdAt` INTEGER NOT NULL,
+                `updatedAt` INTEGER NOT NULL
+            )
+            """.trimIndent()
+        )
+        database.execSQL("ALTER TABLE `messages` ADD COLUMN `conversationId` TEXT NOT NULL DEFAULT 'default'")
+        database.execSQL("CREATE INDEX IF NOT EXISTS `index_messages_conversationId` ON `messages` (`conversationId`)")
+
+        // Seed default conversation if any historical messages exist
+        database.execSQL(
+            """
+            INSERT OR IGNORE INTO `conversations` (`id`, `title`, `createdAt`, `updatedAt`)
+            VALUES ('default', 'Chat Archive', strftime('%s','now') * 1000, strftime('%s','now') * 1000)
+            """.trimIndent()
+        )
+    }
+}
+
 @Database(
     entities = [
         MessageEntity::class,
@@ -131,8 +158,9 @@ val MIGRATION_7_8 = object : Migration(7, 8) {
         GeofenceTaskEntity::class,
         ApiUsageLogEntity::class,
         CandidateMemoryEntity::class,
+        ConversationEntity::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = false
 )
 abstract class PersonalAIDatabase : RoomDatabase() {
@@ -142,4 +170,5 @@ abstract class PersonalAIDatabase : RoomDatabase() {
     abstract fun geofenceTaskDao(): GeofenceTaskDao
     abstract fun apiUsageLogDao(): ApiUsageLogDao
     abstract fun candidateMemoryDao(): CandidateMemoryDao
+    abstract fun conversationDao(): ConversationDao
 }

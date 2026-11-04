@@ -203,6 +203,11 @@ class AgentLoopCancellationTest {
             kotlinx.coroutines.awaitCancellation()
         }
 
+        val conversationRepo = mockk<com.personal.personalai.domain.repository.ConversationRepository>(relaxed = true)
+        val mockChatRepo = mockk<ChatRepository>(relaxed = true)
+        every { conversationRepo.getAllConversations() } returns flowOf(emptyList())
+        every { mockChatRepo.getMessagesByConversation(any()) } returns flowOf(emptyList())
+
         val viewModel = ChatViewModel(
             agentLoopUseCase,
             getChatHistoryUseCase,
@@ -212,6 +217,8 @@ class AgentLoopCancellationTest {
             permissionBroker,
             candidateMemoryRepo,
             extractCandidateMemoriesUseCase,
+            conversationRepo,
+            mockChatRepo,
             context
         )
 
@@ -264,6 +271,11 @@ class AgentLoopCancellationTest {
             emit(AgentStep.Complete(Result.success("Fresh answer")))
         }
 
+        val conversationRepo2 = mockk<com.personal.personalai.domain.repository.ConversationRepository>(relaxed = true)
+        val mockChatRepo2 = mockk<ChatRepository>(relaxed = true)
+        every { conversationRepo2.getAllConversations() } returns flowOf(emptyList())
+        every { mockChatRepo2.getMessagesByConversation(any()) } returns flowOf(emptyList())
+
         val viewModel = ChatViewModel(
             agentLoopUseCase,
             getChatHistoryUseCase,
@@ -273,6 +285,8 @@ class AgentLoopCancellationTest {
             permissionBroker,
             candidateMemoryRepo,
             extractCandidateMemoriesUseCase,
+            conversationRepo2,
+            mockChatRepo2,
             context
         )
 
@@ -320,6 +334,11 @@ class AgentLoopCancellationTest {
             emit(AgentStep.Complete(Result.success("Success 2")))
         }
 
+        val conversationRepo3 = mockk<com.personal.personalai.domain.repository.ConversationRepository>(relaxed = true)
+        val mockChatRepo3 = mockk<ChatRepository>(relaxed = true)
+        every { conversationRepo3.getAllConversations() } returns flowOf(emptyList())
+        every { mockChatRepo3.getMessagesByConversation(any()) } returns flowOf(emptyList())
+
         val viewModel = ChatViewModel(
             agentLoopUseCase,
             getChatHistoryUseCase,
@@ -329,6 +348,8 @@ class AgentLoopCancellationTest {
             permissionBroker,
             candidateMemoryRepo,
             extractCandidateMemoriesUseCase,
+            conversationRepo3,
+            mockChatRepo3,
             context
         )
 
@@ -369,6 +390,12 @@ class AgentLoopCancellationTest {
         // 1. Verify that ordinary extraction exceptions are caught and logged without crashing the ViewModel
         coEvery { extractCandidateMemoriesUseCase() } throws RuntimeException("Database error")
 
+        val conversationRepo = mockk<com.personal.personalai.domain.repository.ConversationRepository>(relaxed = true)
+        every { conversationRepo.getAllConversations() } returns flowOf(emptyList())
+
+        val mockChatRepo4 = mockk<ChatRepository>(relaxed = true)
+        every { mockChatRepo4.getMessagesByConversation(any()) } returns flowOf(emptyList())
+
         val errorViewModel = ChatViewModel(
             agentLoopUseCase,
             getChatHistoryUseCase,
@@ -378,6 +405,8 @@ class AgentLoopCancellationTest {
             permissionBroker,
             candidateMemoryRepo,
             extractCandidateMemoriesUseCase,
+            conversationRepo,
+            mockChatRepo4,
             context
         )
         testScheduler.advanceUntilIdle()
@@ -407,6 +436,8 @@ class AgentLoopCancellationTest {
             permissionBroker,
             candidateMemoryRepo,
             extractCandidateMemoriesUseCase,
+            conversationRepo,
+            mockChatRepo4,
             context
         )
 

@@ -81,12 +81,19 @@ class AgentLoopUseCase @Inject constructor(
 ) {
     operator fun invoke(
         message: String,
-        backgroundMode: Boolean = false
+        backgroundMode: Boolean = false,
+        conversationId: String = "default"
     ): Flow<AgentStep> = flow {
         val loopStartMs = SystemClock.elapsedRealtime()
         // 1. Save user message to chat (foreground only)
         if (!backgroundMode) {
-            chatRepository.saveMessage(Message(content = message, role = MessageRole.USER))
+            chatRepository.saveMessage(
+                Message(
+                    content = message,
+                    role = MessageRole.USER,
+                    conversationId = conversationId
+                )
+            )
         }
 
         // 2. Load memories and available tools
@@ -241,7 +248,11 @@ class AgentLoopUseCase @Inject constructor(
                 is AgentResponse.Text -> {
                     if (!backgroundMode) {
                         chatRepository.saveMessage(
-                            Message(content = response.text, role = MessageRole.ASSISTANT)
+                            Message(
+                                content = response.text,
+                                role = MessageRole.ASSISTANT,
+                                conversationId = conversationId
+                            )
                         )
                         // Persist the chain id only after a successful final response.
                         response.responseId?.let { saveChainId(it) }

@@ -1,5 +1,6 @@
 package com.personal.personalai.presentation.chat
 
+import com.personal.personalai.domain.model.Conversation
 import com.personal.personalai.domain.model.Message
 import com.personal.personalai.domain.tools.PermissionBroker
 import com.personal.personalai.domain.tools.UserInputBroker
@@ -9,6 +10,10 @@ import com.personal.personalai.domain.tools.UserInputBroker
 enum class VoiceState { IDLE, RECORDING, TRANSCRIBING }
 
 data class ChatUiState(
+    val activeConversationId: String = "default",
+    val activeConversationTitle: String = "Current Chat",
+    val conversations: List<Conversation> = emptyList(),
+    val isHistoryDrawerOpen: Boolean = false,
     val messages: List<Message> = emptyList(),
     val inputText: String = "",
     val isLoading: Boolean = false,

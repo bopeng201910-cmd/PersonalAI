@@ -11,9 +11,11 @@ import com.personal.personalai.domain.tools.UserInputBroker
 import com.personal.personalai.domain.usecase.AgentLoopUseCase
 import com.personal.personalai.domain.usecase.AgentStep
 import com.personal.personalai.domain.repository.CandidateMemoryRepository
+import com.personal.personalai.domain.repository.ConversationRepository
 import com.personal.personalai.domain.usecase.ExtractCandidateMemoriesUseCase
 import com.personal.personalai.domain.usecase.GetChatHistoryUseCase
 import com.personal.personalai.domain.usecase.TranscribeAudioUseCase
+import com.personal.personalai.domain.repository.ChatRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,6 +25,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.util.UUID
 import javax.inject.Inject
 
 @HiltViewModel
@@ -35,6 +38,8 @@ class ChatViewModel @Inject constructor(
     private val permissionBroker: PermissionBroker,
     private val candidateMemoryRepository: CandidateMemoryRepository,
     private val extractCandidateMemoriesUseCase: ExtractCandidateMemoriesUseCase,
+    private val conversationRepository: ConversationRepository,
+    private val chatRepository: ChatRepository,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -47,13 +52,76 @@ class ChatViewModel @Inject constructor(
     internal var currentTranscriptionJob: Job? = null
         private set
     private var transcriptionRequestId = 0L
+    private var messagesObservationJob: Job? = null
 
     init {
-        observeMessages()
+        observeConversations()
+        observeMessagesForActiveConversation("default")
         observeUserInputRequests()
         observePermissionRequests()
         observePendingReviewCount()
         checkNewMessagesForMemoryReview()
+    }
+
+    private fun observeConversations() {
+        viewModelScope.launch {
+            conversationRepository.getAllConversations().collect { convs ->
+                _uiState.update { state ->
+                    val activeExists = convs.any { it.id == state.activeConversationId }
+                    val activeTitle = convs.find { it.id == state.activeConversationId }?.title
+                        ?: state.activeConversationTitle
+                    state.copy(
+                        conversations = convs,
+                        activeConversationTitle = activeTitle
+                    )
+                }
+            }
+        }
+    }
+
+    private fun observeMessagesForActiveConversation(conversationId: String) {
+        messagesObservationJob?.cancel()
+        messagesObservationJob = viewModelScope.launch {
+            chatRepository.getMessagesByConversation(conversationId).collect { msgs ->
+                _uiState.update { it.copy(messages = msgs) }
+            }
+        }
+    }
+
+    fun openConversation(conversationId: String) {
+        cancelCurrentMessage()
+        _uiState.update { it.copy(activeConversationId = conversationId, isHistoryDrawerOpen = false) }
+        observeMessagesForActiveConversation(conversationId)
+    }
+
+    fun startNewConversation() {
+        cancelCurrentMessage()
+        val newId = UUID.randomUUID().toString()
+        viewModelScope.launch {
+            conversationRepository.createConversation(newId, "New Conversation")
+            _uiState.update {
+                it.copy(
+                    activeConversationId = newId,
+                    activeConversationTitle = "New Conversation",
+                    isHistoryDrawerOpen = false,
+                    inputText = ""
+                )
+            }
+            observeMessagesForActiveConversation(newId)
+        }
+    }
+
+    fun deleteConversation(conversationId: String) {
+        viewModelScope.launch {
+            conversationRepository.deleteConversation(conversationId)
+            if (_uiState.value.activeConversationId == conversationId) {
+                openConversation("default")
+            }
+        }
+    }
+
+    fun toggleHistoryDrawer(open: Boolean? = null) {
+        _uiState.update { it.copy(isHistoryDrawerOpen = open ?: !it.isHistoryDrawerOpen) }
     }
 
     private fun checkNewMessagesForMemoryReview() {
@@ -77,13 +145,6 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    private fun observeMessages() {
-        viewModelScope.launch {
-            getChatHistoryUseCase().collect { messages ->
-                _uiState.update { it.copy(messages = messages) }
-            }
-        }
-    }
 
     /** Listens for [AskUserTool] questions and surfaces them in the UI. */
     private fun observeUserInputRequests() {
@@ -142,9 +203,18 @@ class ChatViewModel @Inject constructor(
 
         _uiState.update { it.copy(inputText = "", isLoading = true, agentStatusMessage = null, error = null) }
 
+        val activeConvId = _uiState.value.activeConversationId
+
         currentMessageJob = viewModelScope.launch {
             try {
-                agentLoopUseCase(text, backgroundMode = false).collect { step ->
+                // If it's a new conversation, update title from first message
+                if (_uiState.value.messages.isEmpty() && activeConvId != "default") {
+                    val previewTitle = if (text.length > 25) text.take(25) + "…" else text
+                    conversationRepository.updateTitle(activeConvId, previewTitle)
+                }
+                conversationRepository.touchConversation(activeConvId)
+
+                agentLoopUseCase(text, backgroundMode = false, conversationId = activeConvId).collect { step ->
                     when (step) {
                         is AgentStep.ToolCalling ->
                             _uiState.update { it.copy(agentStatusMessage = step.humanReadable) }
@@ -251,6 +321,7 @@ class ChatViewModel @Inject constructor(
     }
 
     fun cancelTranscription() {
+        ++transcriptionRequestId
         currentTranscriptionJob?.cancel()
         currentTranscriptionJob = null
         if (_uiState.value.voiceState == VoiceState.TRANSCRIBING) {

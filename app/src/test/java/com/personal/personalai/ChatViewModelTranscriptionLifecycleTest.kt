@@ -74,10 +74,14 @@ class ChatViewModelTranscriptionLifecycleTest {
             Result.success("Transcribed text")
         }
 
+        val conversationRepo = mockk<com.personal.personalai.domain.repository.ConversationRepository>(relaxed = true)
+        val chatRepo = mockk<com.personal.personalai.domain.repository.ChatRepository>(relaxed = true)
+        every { conversationRepo.getAllConversations() } returns flowOf(emptyList())
+
         val viewModel = ChatViewModel(
             agentLoopUseCase, getChatHistoryUseCase, transcribeAudioUseCase,
             audioRecorder, userInputBroker, permissionBroker, candidateMemoryRepo,
-            extractCandidateMemoriesUseCase, context
+            extractCandidateMemoriesUseCase, conversationRepo, chatRepo, context
         )
 
         // Start record -> Stop record (triggers transcription)
@@ -118,10 +122,14 @@ class ChatViewModelTranscriptionLifecycleTest {
             Result.success("Fresh result from second recording")
         }
 
+        val conversationRepo2 = mockk<com.personal.personalai.domain.repository.ConversationRepository>(relaxed = true)
+        val chatRepo2 = mockk<com.personal.personalai.domain.repository.ChatRepository>(relaxed = true)
+        every { conversationRepo2.getAllConversations() } returns flowOf(emptyList())
+
         val viewModel = ChatViewModel(
             agentLoopUseCase, getChatHistoryUseCase, transcribeAudioUseCase,
             audioRecorder, userInputBroker, permissionBroker, candidateMemoryRepo,
-            extractCandidateMemoriesUseCase, context
+            extractCandidateMemoriesUseCase, conversationRepo2, chatRepo2, context
         )
 
         // First recording
@@ -150,6 +158,62 @@ class ChatViewModelTranscriptionLifecycleTest {
     }
 
     @Test
+    fun `test cancelTranscription immediately invalidates in-flight transcription request ID`() = runTest {
+        val file1 = File.createTempFile("voice_cancel_old", ".m4a")
+        val file2 = File.createTempFile("voice_cancel_new", ".m4a")
+
+        every { audioRecorder.stop() } returnsMany listOf(file1, file2)
+
+        val req1Proceed = CompletableDeferred<Unit>()
+
+        coEvery { transcribeAudioUseCase(file1) } coAnswers {
+            req1Proceed.await()
+            Result.success("Stale result from cancelled request A")
+        }
+
+        coEvery { transcribeAudioUseCase(file2) } coAnswers {
+            Result.success("Fresh result from request B")
+        }
+
+        val conversationRepo3 = mockk<com.personal.personalai.domain.repository.ConversationRepository>(relaxed = true)
+        val chatRepo3 = mockk<com.personal.personalai.domain.repository.ChatRepository>(relaxed = true)
+        every { conversationRepo3.getAllConversations() } returns flowOf(emptyList())
+
+        val viewModel = ChatViewModel(
+            agentLoopUseCase, getChatHistoryUseCase, transcribeAudioUseCase,
+            audioRecorder, userInputBroker, permissionBroker, candidateMemoryRepo,
+            extractCandidateMemoriesUseCase, conversationRepo3, chatRepo3, context
+        )
+
+        // 1. Start Request A
+        viewModel.onRecordStart()
+        viewModel.onRecordStop()
+        testScheduler.advanceUntilIdle()
+
+        // 2. Explicitly cancel transcription for A
+        viewModel.cancelTranscription()
+        testScheduler.advanceUntilIdle()
+        assertEquals(VoiceState.IDLE, viewModel.uiState.value.voiceState)
+
+        // 3. Start a new recording session and start Request B
+        viewModel.onRecordStart()
+        viewModel.onRecordStop()
+        testScheduler.advanceUntilIdle()
+        assertEquals(VoiceState.TRANSCRIBING, viewModel.uiState.value.voiceState)
+
+        // 4. Deliver A's delayed result
+        req1Proceed.complete(Unit)
+        testScheduler.advanceUntilIdle()
+
+        // 5. Verify A cannot modify the UI state and B completes with its fresh result
+        assertEquals(VoiceState.IDLE, viewModel.uiState.value.voiceState)
+        assertEquals("Fresh result from request B", viewModel.uiState.value.inputText)
+
+        assertFalse("File 1 must be deleted", file1.exists())
+        assertFalse("File 2 must be deleted", file2.exists())
+    }
+
+    @Test
     fun `test stale failure from old request cannot overwrite new request state`() = runTest {
         val file1 = File.createTempFile("voice_fail_old", ".m4a")
         val file2 = File.createTempFile("voice_success_new", ".m4a")
@@ -167,10 +231,14 @@ class ChatViewModelTranscriptionLifecycleTest {
             Result.success("Valid new transcription")
         }
 
+        val conversationRepo4 = mockk<com.personal.personalai.domain.repository.ConversationRepository>(relaxed = true)
+        val chatRepo4 = mockk<com.personal.personalai.domain.repository.ChatRepository>(relaxed = true)
+        every { conversationRepo4.getAllConversations() } returns flowOf(emptyList())
+
         val viewModel = ChatViewModel(
             agentLoopUseCase, getChatHistoryUseCase, transcribeAudioUseCase,
             audioRecorder, userInputBroker, permissionBroker, candidateMemoryRepo,
-            extractCandidateMemoriesUseCase, context
+            extractCandidateMemoriesUseCase, conversationRepo4, chatRepo4, context
         )
 
         viewModel.onRecordStart()
@@ -202,10 +270,14 @@ class ChatViewModelTranscriptionLifecycleTest {
         every { audioRecorder.stop() } returns file
         coEvery { transcribeAudioUseCase(file) } returns Result.failure(RuntimeException("Whisper server 500"))
 
+        val conversationRepo5 = mockk<com.personal.personalai.domain.repository.ConversationRepository>(relaxed = true)
+        val chatRepo5 = mockk<com.personal.personalai.domain.repository.ChatRepository>(relaxed = true)
+        every { conversationRepo5.getAllConversations() } returns flowOf(emptyList())
+
         val viewModel = ChatViewModel(
             agentLoopUseCase, getChatHistoryUseCase, transcribeAudioUseCase,
             audioRecorder, userInputBroker, permissionBroker, candidateMemoryRepo,
-            extractCandidateMemoriesUseCase, context
+            extractCandidateMemoriesUseCase, conversationRepo5, chatRepo5, context
         )
 
         viewModel.onRecordStart()

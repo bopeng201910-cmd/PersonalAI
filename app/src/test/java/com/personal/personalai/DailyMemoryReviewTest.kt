@@ -104,6 +104,36 @@ class DailyMemoryReviewTest {
     }
 
     @Test
+    fun `test CandidateMemoryRepositoryImpl approveCandidateInTransaction rethrows CancellationException directly`() {
+        val database = mockk<com.personal.personalai.data.local.PersonalAIDatabase>(relaxed = true)
+        val candidateDao = mockk<CandidateMemoryDao>()
+        val memoryDao = mockk<com.personal.personalai.data.local.dao.MemoryDao>()
+
+        coEvery { candidateDao.getById(10L) } throws kotlinx.coroutines.CancellationException("Transaction cancelled")
+
+        val repo = com.personal.personalai.data.repository.CandidateMemoryRepositoryImpl(
+            database, candidateDao, memoryDao
+        )
+
+        var cancellationThrown = false
+        var failureResultReturned = false
+
+        kotlinx.coroutines.runBlocking {
+            try {
+                val res = repo.approveCandidateInTransaction(10L, null, null)
+                if (res.isFailure) {
+                    failureResultReturned = true
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                cancellationThrown = true
+            }
+        }
+
+        assertTrue("CancellationException must be rethrown and not converted to Result.failure", cancellationThrown)
+        assertFalse("CancellationException must never be converted to Result.failure", failureResultReturned)
+    }
+
+    @Test
     fun `test ReviewCandidateMemoryUseCase approve with custom edited text`() = runTest {
         val candidateRepo = mockk<CandidateMemoryRepository>(relaxed = true)
         coEvery {

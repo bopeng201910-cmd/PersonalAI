@@ -19,6 +19,7 @@ import okhttp3.Response
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -75,18 +76,22 @@ class WhisperDataSource @Inject constructor(
                     continuation.invokeOnCancellation {
                         call.cancel()
                     }
+                    val isHandled = AtomicBoolean(false)
                     call.enqueue(object : Callback {
                         override fun onFailure(call: Call, e: IOException) {
-                            if (continuation.isCancelled) return
-                            continuation.resumeWithException(e)
+                            if (isHandled.compareAndSet(false, true)) {
+                                continuation.resumeWithException(e)
+                            }
                         }
 
                         override fun onResponse(call: Call, response: Response) {
-                            if (continuation.isCancelled) {
+                            if (isHandled.compareAndSet(false, true)) {
+                                continuation.resume(response) { _, _, _ ->
+                                    response.close()
+                                }
+                            } else {
                                 response.close()
-                                return
                             }
-                            continuation.resume(response)
                         }
                     })
                 }
@@ -128,7 +133,7 @@ class WhisperDataSource @Inject constructor(
         success: Boolean,
         error: String?,
     ) {
-        runCatching {
+        try {
             val cost = if (success && durationSeconds != null) {
                 OpenAiPricing.estimateWhisperCostUsd(durationSeconds)
             } else 0.0
@@ -145,6 +150,10 @@ class WhisperDataSource @Inject constructor(
                     errorMessage = error,
                 )
             )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // Ordinary telemetry failures must not break the primary transcription operation.
         }
     }
 

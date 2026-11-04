@@ -58,31 +58,37 @@ class CandidateMemoryRepositoryImpl @Inject constructor(
         candidateId: Long,
         customContent: String?,
         customTopic: String?
-    ): Result<Boolean> = runCatching {
-        database.withTransaction {
-            val candidate = candidateMemoryDao.getById(candidateId)
-                ?: return@withTransaction false
+    ): Result<Boolean> = try {
+        Result.success(
+            database.withTransaction {
+                val candidate = candidateMemoryDao.getById(candidateId)
+                    ?: return@withTransaction false
 
-            // Strict check: Only PENDING candidates can be approved
-            if (candidate.status != CandidateStatus.PENDING.name) {
-                return@withTransaction false
-            }
+                // Strict check: Only PENDING candidates can be approved
+                if (candidate.status != CandidateStatus.PENDING.name) {
+                    return@withTransaction false
+                }
 
-            val finalContent = customContent?.trim()?.ifBlank { candidate.content } ?: candidate.content
-            val finalTopic = customTopic?.trim() ?: candidate.topic
+                val finalContent = customContent?.trim()?.ifBlank { candidate.content } ?: candidate.content
+                val finalTopic = customTopic?.trim() ?: candidate.topic
 
-            // 1. Insert official memory in the same transaction
-            memoryDao.insertMemory(
-                MemoryEntity(
-                    content = finalContent,
-                    topic = finalTopic,
-                    createdAt = if (candidate.sourceTimestamp > 0) candidate.sourceTimestamp else System.currentTimeMillis()
+                // 1. Insert official memory in the same transaction
+                memoryDao.insertMemory(
+                    MemoryEntity(
+                        content = finalContent,
+                        topic = finalTopic,
+                        createdAt = if (candidate.sourceTimestamp > 0) candidate.sourceTimestamp else System.currentTimeMillis()
+                    )
                 )
-            )
 
-            // 2. Mark candidate as APPROVED
-            candidateMemoryDao.updateStatus(candidateId, CandidateStatus.APPROVED.name)
-            true
-        }
+                // 2. Mark candidate as APPROVED
+                candidateMemoryDao.updateStatus(candidateId, CandidateStatus.APPROVED.name)
+                true
+            }
+        )
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Result.failure(e)
     }
 }
