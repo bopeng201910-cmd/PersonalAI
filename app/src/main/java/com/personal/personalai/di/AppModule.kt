@@ -106,18 +106,7 @@ object DatabaseModule {
                 MIGRATION_7_8,
                 MIGRATION_8_9,
             )
-            .addCallback(object : androidx.room.RoomDatabase.Callback() {
-                override fun onCreate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
-                    super.onCreate(db)
-                    // Ensure fresh installs on version 9 have the default conversation initialized
-                    db.execSQL(
-                        """
-                        INSERT OR IGNORE INTO `conversations` (`id`, `title`, `createdAt`, `updatedAt`)
-                        VALUES ('default', 'Chat Archive', strftime('%s','now') * 1000, strftime('%s','now') * 1000)
-                        """.trimIndent()
-                    )
-                }
-            })
+            .addCallback(PersonalAIDatabase.ROOM_CALLBACK)
             .build()
 
     @Provides

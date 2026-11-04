@@ -102,17 +102,26 @@ class DatabaseMigration8To9Test {
                     """.trimIndent()
                 )
                 stmt.execute("CREATE INDEX IF NOT EXISTS `index_messages_conversationId` ON `messages` (`conversationId`);")
+            }
+        }
 
-                // Simulate RoomDatabase.Callback onCreate
-                stmt.execute(
-                    """
-                    INSERT OR IGNORE INTO `conversations` (`id`, `title`, `createdAt`, `updatedAt`)
-                    VALUES ('default', 'Chat Archive', 1700000000000, 1700000000000);
-                    """.trimIndent()
-                )
+        // Execute the REAL production RoomDatabase.Callback
+        val mockDb = mockk<SupportSQLiteDatabase>(relaxed = true)
+        every { mockDb.execSQL(any()) } answers {
+            val sql = firstArg<String>()
+            DriverManager.getConnection(url).use { conn ->
+                conn.createStatement().use { stmt ->
+                    stmt.execute(sql)
+                }
+            }
+        }
 
+        com.personal.personalai.data.local.PersonalAIDatabase.ROOM_CALLBACK.onCreate(mockDb)
+
+        DriverManager.getConnection(url).use { conn ->
+            conn.createStatement().use { stmt ->
                 val rsConv = stmt.executeQuery("SELECT id, title FROM conversations WHERE id = 'default';")
-                assertTrue("Fresh install must seed default conversation", rsConv.next())
+                assertTrue("Fresh install must seed default conversation via production callback", rsConv.next())
                 assertEquals("default", rsConv.getString("id"))
                 assertEquals("Chat Archive", rsConv.getString("title"))
 
@@ -121,6 +130,50 @@ class DatabaseMigration8To9Test {
                 val rsMsg = stmt.executeQuery("SELECT conversationId FROM messages WHERE content = 'Fresh test message';")
                 assertTrue(rsMsg.next())
                 assertEquals("default", rsMsg.getString("conversationId"))
+            }
+        }
+    }
+
+    @Test
+    fun `test Room callback idempotency on repeated onCreate or pre-existing default conversation`() {
+        val tempDb = File.createTempFile("test_v9_idempotent", ".db")
+        tempDb.deleteOnExit()
+        val url = "jdbc:sqlite:${tempDb.absolutePath}"
+
+        DriverManager.getConnection(url).use { conn ->
+            conn.createStatement().use { stmt ->
+                stmt.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS `conversations` (
+                        `id` TEXT PRIMARY KEY NOT NULL,
+                        `title` TEXT NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        `updatedAt` INTEGER NOT NULL
+                    );
+                    """.trimIndent()
+                )
+            }
+        }
+
+        val mockDb = mockk<SupportSQLiteDatabase>(relaxed = true)
+        every { mockDb.execSQL(any()) } answers {
+            val sql = firstArg<String>()
+            DriverManager.getConnection(url).use { conn ->
+                conn.createStatement().use { stmt ->
+                    stmt.execute(sql)
+                }
+            }
+        }
+
+        // Run production callback twice
+        com.personal.personalai.data.local.PersonalAIDatabase.ROOM_CALLBACK.onCreate(mockDb)
+        com.personal.personalai.data.local.PersonalAIDatabase.ROOM_CALLBACK.onCreate(mockDb)
+
+        DriverManager.getConnection(url).use { conn ->
+            conn.createStatement().use { stmt ->
+                val rs = stmt.executeQuery("SELECT count(*) AS total FROM conversations WHERE id = 'default';")
+                assertTrue(rs.next())
+                assertEquals("Exactly 1 default conversation must exist without duplication errors", 1, rs.getInt("total"))
             }
         }
     }

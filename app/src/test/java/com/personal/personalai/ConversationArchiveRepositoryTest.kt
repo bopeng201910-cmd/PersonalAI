@@ -1,10 +1,14 @@
 package com.personal.personalai
 
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.MutablePreferences
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.longPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
 import com.personal.personalai.data.local.PersonalAIDatabase
 import com.personal.personalai.data.local.dao.ConversationDao
 import com.personal.personalai.data.local.dao.MessageDao
 import com.personal.personalai.data.local.entity.ConversationEntity
-import com.personal.personalai.data.local.entity.MessageEntity
 import com.personal.personalai.data.repository.ConversationRepositoryImpl
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -15,21 +19,25 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.util.concurrent.Executor
 
 class ConversationArchiveRepositoryTest {
 
     private val database = mockk<PersonalAIDatabase>(relaxed = true)
     private val conversationDao = mockk<ConversationDao>(relaxed = true)
     private val messageDao = mockk<MessageDao>(relaxed = true)
+    private val dataStore = mockk<DataStore<Preferences>>(relaxed = true)
     private lateinit var repository: ConversationRepositoryImpl
 
     @Before
     fun setUp() {
-        repository = ConversationRepositoryImpl(database, conversationDao, messageDao)
+        // Direct executor prevents MockK coroutine transaction thread hang
+        val directExecutor = Executor { it.run() }
+        every { database.transactionExecutor } returns directExecutor
+        repository = ConversationRepositoryImpl(database, conversationDao, messageDao, dataStore)
     }
 
     @Test
@@ -67,5 +75,27 @@ class ConversationArchiveRepositoryTest {
 
         coVerify(exactly = 1) { messageDao.deleteMessagesByConversation("conv-del-1") }
         coVerify(exactly = 1) { conversationDao.deleteConversationById("conv-del-1") }
+    }
+
+    @Test
+    fun `test Deleting conversation clears DataStore response chain keys for deleted conversation only`() = runBlocking {
+        val capturedTransform = slot<suspend (Preferences) -> Preferences>()
+        val mockMutablePrefs = mockk<MutablePreferences>(relaxed = true)
+        val mockInitialPrefs = mockk<Preferences>(relaxed = true)
+        every { mockInitialPrefs.toMutablePreferences() } returns mockMutablePrefs
+
+        coEvery { dataStore.updateData(capture(capturedTransform)) } coAnswers {
+            capturedTransform.captured.invoke(mockInitialPrefs)
+        }
+
+        repository.deleteConversation("conv-del-xyz")
+
+        coVerify(exactly = 1) {
+            mockMutablePrefs.remove(stringPreferencesKey("last_response_id_conv-del-xyz"))
+            mockMutablePrefs.remove(longPreferencesKey("last_response_at_ms_conv-del-xyz"))
+        }
+        coVerify(exactly = 0) {
+            mockMutablePrefs.remove(stringPreferencesKey("last_response_id_conv-other"))
+        }
     }
 }

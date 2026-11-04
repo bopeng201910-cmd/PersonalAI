@@ -53,6 +53,7 @@ class ChatViewModel @Inject constructor(
         private set
     private var transcriptionRequestId = 0L
     private var messagesObservationJob: Job? = null
+    private var conversationSwitchRequestId = 0L
 
     init {
         observeConversations()
@@ -83,38 +84,64 @@ class ChatViewModel @Inject constructor(
         messagesObservationJob?.cancel()
         messagesObservationJob = viewModelScope.launch {
             chatRepository.getMessagesByConversation(conversationId).collect { msgs ->
-                _uiState.update { it.copy(messages = msgs) }
+                // Guard: only update UI if the observed conversation is still the active conversation
+                if (_uiState.value.activeConversationId == conversationId) {
+                    _uiState.update { it.copy(messages = msgs) }
+                }
             }
         }
     }
 
     fun openConversation(conversationId: String) {
+        ++conversationSwitchRequestId
         cancelCurrentMessage()
-        _uiState.update { it.copy(activeConversationId = conversationId, isHistoryDrawerOpen = false) }
+        _uiState.update {
+            it.copy(
+                activeConversationId = conversationId,
+                isHistoryDrawerOpen = false,
+                isLoading = false,
+                agentStatusMessage = null,
+                error = null
+            )
+        }
         observeMessagesForActiveConversation(conversationId)
     }
 
     fun startNewConversation() {
+        val requestId = ++conversationSwitchRequestId
         cancelCurrentMessage()
         val newId = UUID.randomUUID().toString()
         viewModelScope.launch {
             conversationRepository.createConversation(newId, "New Conversation")
-            _uiState.update {
-                it.copy(
-                    activeConversationId = newId,
-                    activeConversationTitle = "New Conversation",
-                    isHistoryDrawerOpen = false,
-                    inputText = ""
-                )
+            if (requestId == conversationSwitchRequestId) {
+                _uiState.update {
+                    it.copy(
+                        activeConversationId = newId,
+                        activeConversationTitle = "New Conversation",
+                        isHistoryDrawerOpen = false,
+                        inputText = "",
+                        isLoading = false,
+                        agentStatusMessage = null,
+                        error = null
+                    )
+                }
+                observeMessagesForActiveConversation(newId)
             }
-            observeMessagesForActiveConversation(newId)
         }
     }
 
     fun deleteConversation(conversationId: String) {
+        if (conversationId == "default") {
+            // Reserved default conversation is protected and cannot be deleted
+            return
+        }
+        val isDeletingActive = (_uiState.value.activeConversationId == conversationId)
+        if (isDeletingActive) {
+            cancelCurrentMessage()
+        }
         viewModelScope.launch {
             conversationRepository.deleteConversation(conversationId)
-            if (_uiState.value.activeConversationId == conversationId) {
+            if (isDeletingActive) {
                 openConversation("default")
             }
         }

@@ -171,4 +171,23 @@ abstract class PersonalAIDatabase : RoomDatabase() {
     abstract fun apiUsageLogDao(): ApiUsageLogDao
     abstract fun candidateMemoryDao(): CandidateMemoryDao
     abstract fun conversationDao(): ConversationDao
+
+    companion object {
+        val ROOM_CALLBACK = object : RoomDatabase.Callback() {
+            override fun onCreate(db: SupportSQLiteDatabase) {
+                super.onCreate(db)
+                // Ensure fresh installs on version 9 have the default conversation initialized
+                seedDefaultConversation(db)
+            }
+
+            fun seedDefaultConversation(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    INSERT OR IGNORE INTO `conversations` (`id`, `title`, `createdAt`, `updatedAt`)
+                    VALUES ('default', 'Chat Archive', strftime('%s','now') * 1000, strftime('%s','now') * 1000)
+                    """.trimIndent()
+                )
+            }
+        }
+    }
 }
