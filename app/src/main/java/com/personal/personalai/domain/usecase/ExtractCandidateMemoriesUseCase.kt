@@ -1,0 +1,259 @@
+package com.personal.personalai.domain.usecase
+
+import android.util.Log
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.edit
+import com.personal.personalai.data.local.dao.MessageDao
+import com.personal.personalai.domain.model.CandidateMemory
+import com.personal.personalai.domain.model.CandidateStatus
+import com.personal.personalai.domain.model.MemoryCategory
+import com.personal.personalai.domain.model.MemorySourceType
+import com.personal.personalai.domain.repository.AiRepository
+import com.personal.personalai.domain.repository.CandidateMemoryRepository
+import com.personal.personalai.domain.tools.AgentResponse
+import com.personal.personalai.presentation.settings.PreferencesKeys
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import org.json.JSONArray
+import org.json.JSONObject
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import javax.inject.Inject
+import javax.inject.Singleton
+
+@Singleton
+class ExtractCandidateMemoriesUseCase @Inject constructor(
+    private val messageDao: MessageDao,
+    private val candidateMemoryRepository: CandidateMemoryRepository,
+    private val aiRepository: AiRepository,
+    private val dataStore: DataStore<Preferences>
+) {
+    private val extractionMutex = Mutex()
+
+    companion object {
+        private const val TAG = "ExtractCandidateMemories"
+        private val DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")
+    }
+
+    suspend operator fun invoke(): Result<Int> {
+        return try {
+            Result.success(
+                extractionMutex.withLock {
+                    performExtraction()
+                }
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    private suspend fun performExtraction(): Int {
+        val prefs = dataStore.data.first()
+        val lastReviewedId = prefs[PreferencesKeys.LAST_REVIEWED_MESSAGE_ID] ?: 0L
+
+        val newMessages = messageDao.getMessagesAfterId(lastReviewedId)
+        if (newMessages.isEmpty()) {
+            return 0
+        }
+
+        // Only process if there's at least one user message
+        val hasUserMessage = newMessages.any { it.role == "USER" }
+        if (!hasUserMessage) {
+            // Update cursor since there's no user content to extract
+            val maxId = newMessages.maxOf { it.id }
+            dataStore.edit { it[PreferencesKeys.LAST_REVIEWED_MESSAGE_ID] = maxId }
+            return 0
+        }
+
+        // Build conversation transcript
+        val transcriptBuilder = StringBuilder()
+        for (msg in newMessages) {
+            val timeStr = Instant.ofEpochMilli(msg.timestamp)
+                .atZone(ZoneId.systemDefault())
+                .format(DATE_FORMATTER)
+            transcriptBuilder.append("[${msg.role}] (id=${msg.id}, time=$timeStr):\n")
+            transcriptBuilder.append(msg.content.trim())
+            transcriptBuilder.append("\n\n")
+        }
+
+        val extractionPrompt = """
+            You are an expert AI assistant performing Daily Memory Review.
+            Analyze the following recent conversation transcript between the user and assistant.
+            Extract any valuable pieces of information that are worthy of long-term retention into a JSON array.
+
+            Each item in the array must be a JSON object with:
+            - "content": A concise, clear summary of what to remember.
+            - "topic": A short category keyword (e.g. "coffee", "career", "workout", "project").
+            - "original_snippet": Exact excerpt or quotation from the dialogue illustrating this memory.
+            - "category": One of: "USER_PREFERENCE", "IMPORTANT_DECISION", "LONG_TERM_GOAL", "PROJECT_PROGRESS", "TODO_ITEM", "OTHER_IMPORTANT".
+            - "source_type": Either "EXPLICIT_FACT" (if the user directly stated it) or "INFERRED_PREFERENCE" (if deduced by AI).
+            - "source_message_id": The message id (integer) where this was stated.
+            - "source_timestamp": The timestamp in millis if available, or 0.
+
+            CRITICAL RULES:
+            1. If there is NO long-term valuable information (casual chat, greeting, small talk, confirmations), return strictly an empty JSON array: []
+            2. Do NOT invent or hallucinate memories.
+            3. Return ONLY a valid JSON array string (starts with [ and ends with ]). Do not enclose in markdown blocks.
+
+            Transcript:
+            ${transcriptBuilder.toString()}
+        """.trimIndent()
+
+        val conversationItems = JSONArray().apply {
+            put(JSONObject().apply {
+                put("role", "user")
+                put("content", extractionPrompt)
+            })
+        }
+
+        val aiResult = aiRepository.sendMessageWithTools(
+            conversationItems = conversationItems,
+            memories = emptyList(),
+            tools = emptyList(),
+            previousResponseId = null,
+            taskType = com.personal.personalai.domain.router.LumioTaskType.DAILY_REVIEW
+        )
+
+        val response = aiResult.getOrThrow()
+
+        val text = when (response) {
+            is AgentResponse.Text -> response.text
+            is AgentResponse.ToolCalls -> ""
+        }
+
+        val validMessageIds = newMessages.map { it.id }.toSet()
+
+        // Strictly distinguish valid JSON (including empty array []) vs JSON parse errors
+        // and strictly validate source_message_id against validMessageIds
+        val candidates = parseCandidatesJsonStrict(
+            rawText = text,
+            validMessageIds = validMessageIds,
+            fallbackTimestamp = newMessages.last().timestamp
+        ).getOrThrow()
+
+        if (candidates.isNotEmpty()) {
+            // Deduplicate against existing candidate records from the same messages
+            val messageIds = newMessages.map { it.id }
+            val existing = candidateMemoryRepository.getBySourceMessageIds(messageIds)
+            val toInsert = candidates.filter { candidate ->
+                existing.none { exist ->
+                    exist.sourceMessageId == candidate.sourceMessageId &&
+                    exist.content.trim().equals(candidate.content.trim(), ignoreCase = true)
+                }
+            }
+
+            if (toInsert.isNotEmpty()) {
+                candidateMemoryRepository.saveCandidates(toInsert)
+            }
+        }
+
+        // Advance cursor reliably only AFTER successful extraction (or confirmed empty []) and save
+        val newMaxId = newMessages.maxOf { it.id }
+        dataStore.edit {
+            it[PreferencesKeys.LAST_REVIEWED_MESSAGE_ID] = newMaxId
+        }
+
+        return candidates.size
+    }
+
+    /**
+     * Strictly parses candidate memories JSON array.
+     * Returns Result.failure if the text does not contain a valid JSON array or if parsing fails.
+     * Returns Result.success(emptyList()) only if the LLM returned a valid empty array `[]`.
+     */
+    fun parseCandidatesJsonStrict(
+        rawText: String,
+        validMessageIds: Set<Long> = emptySet(),
+        fallbackTimestamp: Long
+    ): Result<List<CandidateMemory>> {
+        val cleaned = rawText.replace(Regex("```[a-z]*\\s*"), "").replace("```", "").trim()
+        val start = cleaned.indexOf('[')
+        val end = cleaned.lastIndexOf(']')
+        if (start == -1 || end == -1 || start >= end) {
+            return Result.failure(IllegalArgumentException("AI response does not contain a valid JSON array: $rawText"))
+        }
+
+        val jsonArrayStr = cleaned.substring(start, end + 1)
+        val array = try {
+            JSONArray(jsonArrayStr)
+        } catch (e: Exception) {
+            return Result.failure(IllegalArgumentException("Malformed JSON array returned by AI: ${e.message}", e))
+        }
+
+        val results = mutableListOf<CandidateMemory>()
+        for (i in 0 until array.length()) {
+            val optItem = array.opt(i)
+            if (optItem !is JSONObject) {
+                return Result.failure(IllegalArgumentException("Item at index $i is not a JSON object: $optItem"))
+            }
+            val obj = optItem
+
+            if (!obj.has("content")) {
+                return Result.failure(IllegalArgumentException("Item at index $i is missing required 'content' field"))
+            }
+
+            val content = obj.getString("content").trim()
+            if (content.isBlank()) {
+                return Result.failure(IllegalArgumentException("Item at index $i has blank 'content'"))
+            }
+
+            val topic = obj.optString("topic", "")
+            val originalSnippet = obj.optString("original_snippet", "")
+            val catStr = obj.optString("category", MemoryCategory.OTHER_IMPORTANT.name)
+            val category = runCatching { MemoryCategory.valueOf(catStr) }
+                .getOrElse {
+                    return Result.failure(IllegalArgumentException("Item at index $i has invalid category '$catStr'"))
+                }
+            val sourceStr = obj.optString("source_type", MemorySourceType.EXPLICIT_FACT.name)
+            val sourceType = runCatching { MemorySourceType.valueOf(sourceStr) }
+                .getOrElse {
+                    return Result.failure(IllegalArgumentException("Item at index $i has invalid source_type '$sourceStr'"))
+                }
+
+            // Strict validation of source_message_id:
+            // Must be present, not null, an actual Long/Int (not string or float or missing), and in validMessageIds
+            if (!obj.has("source_message_id") || obj.isNull("source_message_id")) {
+                return Result.failure(IllegalArgumentException("Item at index $i is missing or null 'source_message_id'"))
+            }
+
+            val rawVal = obj.get("source_message_id")
+            val validatedMsgId: Long = when (rawVal) {
+                is Long -> rawVal
+                is Int -> rawVal.toLong()
+                else -> {
+                    return Result.failure(
+                        IllegalArgumentException("Item at index $i has invalid 'source_message_id' type: ${rawVal::class.java.simpleName}")
+                    )
+                }
+            }
+
+            if (validatedMsgId !in validMessageIds) {
+                return Result.failure(
+                    IllegalArgumentException("Item at index $i has source_message_id $validatedMsgId not belonging to current batch: $validMessageIds")
+                )
+            }
+
+            val sourceTs = obj.optLong("source_timestamp", fallbackTimestamp)
+
+            results.add(
+                CandidateMemory(
+                    content = content,
+                    topic = topic,
+                    originalSnippet = originalSnippet,
+                    category = category,
+                    sourceType = sourceType,
+                    sourceMessageId = validatedMsgId,
+                    sourceTimestamp = if (sourceTs > 0) sourceTs else fallbackTimestamp,
+                    status = CandidateStatus.PENDING
+                )
+            )
+        }
+        return Result.success(results)
+    }
+}

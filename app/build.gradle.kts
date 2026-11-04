@@ -40,6 +40,10 @@ android {
         jvmTarget = "11"
     }
 
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
+
     buildFeatures {
         compose = true
     }
@@ -84,6 +88,8 @@ dependencies {
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
     ksp(libs.room.compiler)
+    testImplementation(libs.room.testing)
+    testImplementation(libs.sqlite.jdbc)
 
     // WorkManager + Hilt integration
     implementation(libs.work.runtime.ktx)
@@ -113,6 +119,7 @@ dependencies {
     // Unit Tests
     testImplementation(libs.junit)
     testImplementation(libs.mockk)
+    testImplementation("org.json:json:20240303")
     testImplementation(libs.kotlinx.coroutines.test)
 
     // Instrumented Tests
