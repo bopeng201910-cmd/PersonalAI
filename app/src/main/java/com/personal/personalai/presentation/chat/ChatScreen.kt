@@ -46,9 +46,13 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.StopCircle
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -210,12 +214,20 @@ fun ChatScreen(
         Scaffold(
             topBar = {
                 TopAppBar(
-                    title = { Text(stringResource(R.string.chat_title)) },
+                    navigationIcon = {
+                        IconButton(onClick = { viewModel.toggleHistoryDrawer() }) {
+                            Icon(Icons.Default.History, contentDescription = "Conversation History")
+                        }
+                    },
+                    title = { Text(uiState.activeConversationTitle) },
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = MaterialTheme.colorScheme.primaryContainer,
                         titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer
                     ),
                     actions = {
+                        IconButton(onClick = { viewModel.startNewConversation() }) {
+                            Icon(Icons.Default.Add, contentDescription = "New Conversation")
+                        }
                         IconButton(onClick = onNavigateToSettings) {
                             Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.settings_icon_description))
                         }
@@ -318,10 +330,90 @@ fun ChatScreen(
                     }
                 }
 
+                if (uiState.isHistoryDrawerOpen) {
+                    androidx.compose.material3.ModalBottomSheet(
+                        onDismissRequest = { viewModel.toggleHistoryDrawer(false) }
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Conversations", style = MaterialTheme.typography.titleLarge)
+                                androidx.compose.material3.TextButton(
+                                    onClick = { viewModel.startNewConversation() }
+                                ) {
+                                    Icon(Icons.Default.Add, contentDescription = null)
+                                    Spacer(Modifier.size(4.dp))
+                                    Text("New")
+                                }
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            LazyColumn(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(300.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                items(uiState.conversations, key = { it.id }) { conv ->
+                                    val isSelected = conv.id == uiState.activeConversationId
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = if (isSelected) MaterialTheme.colorScheme.secondaryContainer
+                                        else MaterialTheme.colorScheme.surfaceVariant,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .pointerInput(conv.id) {
+                                                // Handle clicks
+                                            },
+                                        onClick = { viewModel.openConversation(conv.id) }
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(12.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    conv.title,
+                                                    style = MaterialTheme.typography.bodyLarge,
+                                                    maxLines = 1
+                                                )
+                                                Text(
+                                                    formatTimestamp(conv.updatedAt),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.outline
+                                                )
+                                            }
+                                            if (conv.id != "default") {
+                                                IconButton(onClick = { viewModel.deleteConversation(conv.id) }) {
+                                                    Icon(
+                                                        Icons.Default.Delete,
+                                                        contentDescription = "Delete conversation",
+                                                        tint = MaterialTheme.colorScheme.error
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 MessageInputBar(
                     text = uiState.inputText,
                     onTextChanged = viewModel::onInputChanged,
                     onSend = viewModel::sendMessage,
+                    onStop = viewModel::cancelCurrentMessage,
                     voiceState = uiState.voiceState,
                     onRecordPress = {
                         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
@@ -501,6 +593,7 @@ private fun MessageInputBar(
     text: String,
     onTextChanged: (String) -> Unit,
     onSend: () -> Unit,
+    onStop: () -> Unit = {},
     voiceState: VoiceState,
     onRecordPress: () -> Unit,
     onRecordRelease: () -> Unit,
@@ -603,17 +696,28 @@ private fun MessageInputBar(
                 }
             }
 
-            IconButton(
-                onClick = onSend,
-                enabled = text.isNotBlank() && !isLoading
-            ) {
-                Icon(
-                    Icons.AutoMirrored.Filled.Send,
-                    contentDescription = stringResource(R.string.send_description),
-                    tint = if (text.isNotBlank() && !isLoading)
-                        MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.outline
-                )
+            if (isLoading) {
+                IconButton(onClick = onStop) {
+                    Icon(
+                        Icons.Default.StopCircle,
+                        contentDescription = "Stop response",
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+            } else {
+                IconButton(
+                    onClick = onSend,
+                    enabled = text.isNotBlank()
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.Send,
+                        contentDescription = stringResource(R.string.send_description),
+                        tint = if (text.isNotBlank())
+                            MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.outline
+                    )
+                }
             }
         }
     }

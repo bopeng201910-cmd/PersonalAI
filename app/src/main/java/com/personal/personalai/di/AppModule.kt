@@ -14,8 +14,12 @@ import com.personal.personalai.data.local.MIGRATION_3_4
 import com.personal.personalai.data.local.MIGRATION_4_5
 import com.personal.personalai.data.local.MIGRATION_5_6
 import com.personal.personalai.data.local.MIGRATION_6_7
+import com.personal.personalai.data.local.MIGRATION_7_8
+import com.personal.personalai.data.local.MIGRATION_8_9
 import com.personal.personalai.data.local.PersonalAIDatabase
 import com.personal.personalai.data.local.dao.ApiUsageLogDao
+import com.personal.personalai.data.local.dao.CandidateMemoryDao
+import com.personal.personalai.data.local.dao.ConversationDao
 import com.personal.personalai.data.local.dao.GeofenceTaskDao
 import com.personal.personalai.data.local.dao.MemoryDao
 import com.personal.personalai.data.local.dao.MessageDao
@@ -24,6 +28,9 @@ import com.personal.personalai.data.audio.AudioRecorderImpl
 import com.personal.personalai.data.datasource.ai.LocalLlmDataSource
 import com.personal.personalai.data.repository.AiRepositoryImpl
 import com.personal.personalai.data.repository.ApiUsageRepositoryImpl
+import com.personal.personalai.data.repository.CandidateMemoryRepositoryImpl
+import com.personal.personalai.data.repository.ConversationRepositoryImpl
+import com.personal.personalai.data.router.LumioAiRouterImpl
 import com.personal.personalai.localllm.engine.LiteRtLlmEngine
 import com.personal.personalai.data.repository.ChatRepositoryImpl
 import com.personal.personalai.data.repository.GeofenceTaskRepositoryImpl
@@ -59,10 +66,12 @@ import com.personal.personalai.data.tools.web.WebSearchTool
 import com.personal.personalai.domain.audio.AudioRecorder
 import com.personal.personalai.domain.repository.AiRepository
 import com.personal.personalai.domain.repository.ApiUsageRepository
+import com.personal.personalai.domain.repository.CandidateMemoryRepository
 import com.personal.personalai.domain.repository.ChatRepository
 import com.personal.personalai.domain.repository.GeofenceTaskRepository
 import com.personal.personalai.domain.repository.MemoryRepository
 import com.personal.personalai.domain.repository.TaskRepository
+import com.personal.personalai.domain.router.LumioAiRouter
 import com.personal.personalai.domain.tools.AgentTool
 import com.personal.personalai.domain.tools.ToolRegistry
 import dagger.Binds
@@ -94,8 +103,14 @@ object DatabaseModule {
                 MIGRATION_4_5,
                 MIGRATION_5_6,
                 MIGRATION_6_7,
+                MIGRATION_7_8,
+                MIGRATION_8_9,
             )
+            .addCallback(PersonalAIDatabase.ROOM_CALLBACK)
             .build()
+
+    @Provides
+    fun provideConversationDao(db: PersonalAIDatabase): ConversationDao = db.conversationDao()
 
     @Provides
     fun provideMessageDao(db: PersonalAIDatabase): MessageDao = db.messageDao()
@@ -111,6 +126,9 @@ object DatabaseModule {
 
     @Provides
     fun provideApiUsageLogDao(db: PersonalAIDatabase): ApiUsageLogDao = db.apiUsageLogDao()
+
+    @Provides
+    fun provideCandidateMemoryDao(db: PersonalAIDatabase): CandidateMemoryDao = db.candidateMemoryDao()
 
     @Provides
     @Singleton
@@ -152,6 +170,10 @@ abstract class RepositoryModule {
 
     @Binds
     @Singleton
+    abstract fun bindLumioAiRouter(impl: LumioAiRouterImpl): LumioAiRouter
+
+    @Binds
+    @Singleton
     abstract fun bindAiRepository(impl: AiRepositoryImpl): AiRepository
 
     @Binds
@@ -165,6 +187,14 @@ abstract class RepositoryModule {
     @Binds
     @Singleton
     abstract fun bindMemoryRepository(impl: MemoryRepositoryImpl): MemoryRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindCandidateMemoryRepository(impl: CandidateMemoryRepositoryImpl): CandidateMemoryRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindConversationRepository(impl: ConversationRepositoryImpl): com.personal.personalai.domain.repository.ConversationRepository
 
     @Binds
     @Singleton

@@ -1,5 +1,6 @@
 package com.personal.personalai.presentation.chat
 
+import com.personal.personalai.domain.model.Conversation
 import com.personal.personalai.domain.model.Message
 import com.personal.personalai.domain.tools.PermissionBroker
 import com.personal.personalai.domain.tools.UserInputBroker
@@ -9,6 +10,10 @@ import com.personal.personalai.domain.tools.UserInputBroker
 enum class VoiceState { IDLE, RECORDING, TRANSCRIBING }
 
 data class ChatUiState(
+    val activeConversationId: String = "default",
+    val activeConversationTitle: String = "Current Chat",
+    val conversations: List<Conversation> = emptyList(),
+    val isHistoryDrawerOpen: Boolean = false,
     val messages: List<Message> = emptyList(),
     val inputText: String = "",
     val isLoading: Boolean = false,
@@ -18,5 +23,7 @@ data class ChatUiState(
     /** Non-null when the agent loop is paused waiting for the user to answer a question. */
     val pendingInputRequest: UserInputBroker.Request? = null,
     /** Non-null when the agent loop is paused waiting for the user to grant a permission. */
-    val pendingPermissionRequest: PermissionBroker.Request? = null
+    val pendingPermissionRequest: PermissionBroker.Request? = null,
+    /** Number of pending candidate memories waiting for daily review. */
+    val pendingReviewCount: Int = 0
 )

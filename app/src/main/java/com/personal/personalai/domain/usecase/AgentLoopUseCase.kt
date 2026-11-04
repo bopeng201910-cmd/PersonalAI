@@ -19,6 +19,8 @@ import com.personal.personalai.domain.tools.ToolResult
 import com.personal.personalai.presentation.settings.PreferencesKeys
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -79,12 +81,19 @@ class AgentLoopUseCase @Inject constructor(
 ) {
     operator fun invoke(
         message: String,
-        backgroundMode: Boolean = false
+        backgroundMode: Boolean = false,
+        conversationId: String = "default"
     ): Flow<AgentStep> = flow {
         val loopStartMs = SystemClock.elapsedRealtime()
         // 1. Save user message to chat (foreground only)
         if (!backgroundMode) {
-            chatRepository.saveMessage(Message(content = message, role = MessageRole.USER))
+            chatRepository.saveMessage(
+                Message(
+                    content = message,
+                    role = MessageRole.USER,
+                    conversationId = conversationId
+                )
+            )
         }
 
         // 2. Load memories and available tools
@@ -93,34 +102,64 @@ class AgentLoopUseCase @Inject constructor(
                     else toolRegistry.getTools()
 
         // 3. Decide warm/cold and build the initial input items.
-        //    - Warm: a valid previous_response_id within CHAIN_WARM_MS. Send only the new turn.
-        //    - Cold: no chain or expired. Send the last HISTORY_WINDOW messages.
+        //    - Warm: a valid previous_response_id within CHAIN_WARM_MS for this specific conversation. Send only the new turn.
+        //    - Cold: no chain or expired. Send the last HISTORY_WINDOW messages of this active conversation.
         var previousResponseId: String? =
-            if (backgroundMode) null else readWarmChainId()
+            if (backgroundMode) null else readWarmChainId(conversationId)
         var conversationItems = if (previousResponseId != null) {
             buildWarmInput(message)
         } else {
-            buildColdInput(backgroundMode, message)
+            buildColdInput(backgroundMode, message, conversationId)
+        }
+
+        val baseTaskType = if (backgroundMode) {
+            com.personal.personalai.domain.router.LumioTaskType.BACKGROUND_REMINDER
+        } else {
+            com.personal.personalai.domain.router.LumioTaskType.CHAT
         }
 
         // 4. Agent loop
         repeat(MAX_ITERATIONS) { iteration ->
+            currentCoroutineContext().ensureActive()
             val llmStartMs = SystemClock.elapsedRealtime()
-            var response = aiRepository.sendMessageWithTools(
-                conversationItems, memories, tools, previousResponseId
-            ).getOrNull()
+            val effectiveTaskType = if (iteration > 0) {
+                com.personal.personalai.domain.router.LumioTaskType.TOOL_EXECUTION
+            } else {
+                baseTaskType
+            }
+
+            val aiResult = aiRepository.sendMessageWithTools(
+                conversationItems, memories, tools, previousResponseId, effectiveTaskType
+            )
+
+            // If cancelled, propagate CancellationException immediately
+            aiResult.exceptionOrNull()?.let { ex ->
+                if (ex is kotlinx.coroutines.CancellationException || ex is java.util.concurrent.CancellationException) {
+                    throw ex
+                }
+            }
+            currentCoroutineContext().ensureActive()
+
+            var response = aiResult.getOrNull()
 
             // Stale-chain fallback: if the very first call fails and we were
             // chaining, retry once cold. Only the first iteration is eligible
             // because subsequent ones use a response_id we just received.
             if (response == null && iteration == 0 && previousResponseId != null) {
                 Log.w(TAG, "Chained call failed; retrying cold-start")
-                clearChainId()
+                clearChainId(conversationId)
                 previousResponseId = null
-                conversationItems = buildColdInput(backgroundMode, message)
-                response = aiRepository.sendMessageWithTools(
-                    conversationItems, memories, tools, null
-                ).getOrNull()
+                conversationItems = buildColdInput(backgroundMode, message, conversationId)
+                currentCoroutineContext().ensureActive()
+                val retryResult = aiRepository.sendMessageWithTools(
+                    conversationItems, memories, tools, null, effectiveTaskType
+                )
+                retryResult.exceptionOrNull()?.let { ex ->
+                    if (ex is kotlinx.coroutines.CancellationException || ex is java.util.concurrent.CancellationException) {
+                        throw ex
+                    }
+                }
+                response = retryResult.getOrNull()
             }
 
             if (response == null) {
@@ -142,12 +181,14 @@ class AgentLoopUseCase @Inject constructor(
                     // and only needs to send the tool outputs.
                     val nextChainId = response.responseId
                     val toolOutputs = JSONArray()
-                    response.calls.forEach { call ->
+                    for (call in response.calls) {
+                        currentCoroutineContext().ensureActive()
                         emit(AgentStep.ToolCalling(call.name, humanReadable(call.name, call.arguments)))
 
                         // Execute the tool
                         val toolStartMs = SystemClock.elapsedRealtime()
                         val rawResult = toolRegistry.execute(call.name, call.arguments)
+                        currentCoroutineContext().ensureActive()
                         Log.d(
                             TAG,
                             "iteration=${iteration + 1} tool=${call.name} rawToolMs=${SystemClock.elapsedRealtime() - toolStartMs} " +
@@ -162,8 +203,11 @@ class AgentLoopUseCase @Inject constructor(
                                 )
                             } else {
                                 val granted = permissionBroker.requestAndAwait(rawResult.permission)
+                                currentCoroutineContext().ensureActive()
                                 if (granted) {
-                                    toolRegistry.execute(call.name, call.arguments)
+                                    val retryToolResult = toolRegistry.execute(call.name, call.arguments)
+                                    currentCoroutineContext().ensureActive()
+                                    retryToolResult
                                 } else {
                                     ToolResult.Error(
                                         "User denied permission '${rawResult.permission}'. " +
@@ -204,10 +248,14 @@ class AgentLoopUseCase @Inject constructor(
                 is AgentResponse.Text -> {
                     if (!backgroundMode) {
                         chatRepository.saveMessage(
-                            Message(content = response.text, role = MessageRole.ASSISTANT)
+                            Message(
+                                content = response.text,
+                                role = MessageRole.ASSISTANT,
+                                conversationId = conversationId
+                            )
                         )
-                        // Persist the chain id only after a successful final response.
-                        response.responseId?.let { saveChainId(it) }
+                        // Persist the chain id only after a successful final response for this conversation.
+                        response.responseId?.let { saveChainId(conversationId, it) }
                     }
                     Log.d(
                         TAG,
@@ -238,7 +286,11 @@ class AgentLoopUseCase @Inject constructor(
      * each user turn stamped with its immutable send-time. The just-saved
      * latest user message is the final item.
      */
-    private suspend fun buildColdInput(backgroundMode: Boolean, message: String): JSONArray {
+    private suspend fun buildColdInput(
+        backgroundMode: Boolean,
+        message: String,
+        conversationId: String
+    ): JSONArray {
         val items = JSONArray()
         if (backgroundMode) {
             items.put(JSONObject().apply {
@@ -247,7 +299,7 @@ class AgentLoopUseCase @Inject constructor(
             })
             return items
         }
-        val all = chatRepository.getMessages().first()
+        val all = chatRepository.getMessagesByConversation(conversationId).first()
         val startIdx = (all.size - HISTORY_WINDOW).coerceAtLeast(0)
         all.subList(startIdx, all.size).forEach { msg ->
             items.put(JSONObject().apply {
@@ -265,26 +317,32 @@ class AgentLoopUseCase @Inject constructor(
         return items
     }
 
-    // ── Chain-id persistence ──────────────────────────────────────────────────
+    // ── Chain-id persistence (scoped per conversation) ────────────────────────
 
-    private suspend fun readWarmChainId(): String? {
+    private fun chainKey(conversationId: String): androidx.datastore.preferences.core.Preferences.Key<String> =
+        androidx.datastore.preferences.core.stringPreferencesKey("last_response_id_$conversationId")
+
+    private fun chainAtKey(conversationId: String): androidx.datastore.preferences.core.Preferences.Key<Long> =
+        androidx.datastore.preferences.core.longPreferencesKey("last_response_at_ms_$conversationId")
+
+    private suspend fun readWarmChainId(conversationId: String): String? {
         val prefs = dataStore.data.first()
-        val id = prefs[PreferencesKeys.LAST_RESPONSE_ID]?.takeIf { it.isNotBlank() } ?: return null
-        val at = prefs[PreferencesKeys.LAST_RESPONSE_AT_MS] ?: return null
+        val id = prefs[chainKey(conversationId)]?.takeIf { it.isNotBlank() } ?: return null
+        val at = prefs[chainAtKey(conversationId)] ?: return null
         return if (System.currentTimeMillis() - at < CHAIN_WARM_MS) id else null
     }
 
-    private suspend fun saveChainId(id: String) {
+    private suspend fun saveChainId(conversationId: String, id: String) {
         dataStore.edit { prefs ->
-            prefs[PreferencesKeys.LAST_RESPONSE_ID] = id
-            prefs[PreferencesKeys.LAST_RESPONSE_AT_MS] = System.currentTimeMillis()
+            prefs[chainKey(conversationId)] = id
+            prefs[chainAtKey(conversationId)] = System.currentTimeMillis()
         }
     }
 
-    private suspend fun clearChainId() {
+    private suspend fun clearChainId(conversationId: String) {
         dataStore.edit { prefs ->
-            prefs.remove(PreferencesKeys.LAST_RESPONSE_ID)
-            prefs.remove(PreferencesKeys.LAST_RESPONSE_AT_MS)
+            prefs.remove(chainKey(conversationId))
+            prefs.remove(chainAtKey(conversationId))
         }
     }
 
