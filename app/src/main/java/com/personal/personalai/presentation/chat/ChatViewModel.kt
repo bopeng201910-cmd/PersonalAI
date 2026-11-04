@@ -98,6 +98,7 @@ class ChatViewModel @Inject constructor(
         _uiState.update {
             it.copy(
                 activeConversationId = conversationId,
+                messages = emptyList(),
                 isHistoryDrawerOpen = false,
                 isLoading = false,
                 agentStatusMessage = null,
@@ -111,6 +112,15 @@ class ChatViewModel @Inject constructor(
         val requestId = ++conversationSwitchRequestId
         cancelCurrentMessage()
         val newId = UUID.randomUUID().toString()
+        _uiState.update {
+            it.copy(
+                messages = emptyList(),
+                inputText = "",
+                isLoading = false,
+                agentStatusMessage = null,
+                error = null
+            )
+        }
         viewModelScope.launch {
             conversationRepository.createConversation(newId, "New Conversation")
             if (requestId == conversationSwitchRequestId) {
@@ -118,6 +128,7 @@ class ChatViewModel @Inject constructor(
                     it.copy(
                         activeConversationId = newId,
                         activeConversationTitle = "New Conversation",
+                        messages = emptyList(),
                         isHistoryDrawerOpen = false,
                         inputText = "",
                         isLoading = false,
@@ -136,12 +147,14 @@ class ChatViewModel @Inject constructor(
             return
         }
         val isDeletingActive = (_uiState.value.activeConversationId == conversationId)
+        val deletionSwitchId = conversationSwitchRequestId
         if (isDeletingActive) {
             cancelCurrentMessage()
         }
         viewModelScope.launch {
             conversationRepository.deleteConversation(conversationId)
-            if (isDeletingActive) {
+            // Only navigate back to default if this deletion target was active AND no newer conversation selection was made
+            if (isDeletingActive && deletionSwitchId == conversationSwitchRequestId && _uiState.value.activeConversationId == conversationId) {
                 openConversation("default")
             }
         }

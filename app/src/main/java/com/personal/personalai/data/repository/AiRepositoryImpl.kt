@@ -43,11 +43,10 @@ class AiRepositoryImpl @Inject constructor(
     }
 
     override suspend fun transcribeAudio(audioFile: File): Result<String> {
-        val apiKey = dataStore.data.first()[PreferencesKeys.API_KEY].orEmpty()
-        return if (apiKey.isBlank()) {
-            Result.failure(Exception("Whisper requires an OpenAI API key. Add one in Settings."))
-        } else {
-            whisperDataSource.transcribe(apiKey, audioFile)
-        }
+        // Alpha 1.0 STRICT LOCAL-ONLY POLICY:
+        // Cloud Whisper API calls are blocked to prevent audio uploads and cloud network traffic.
+        return Result.failure(
+            Exception("Voice transcription is disabled in Alpha 1.0 local-only mode.")
+        )
     }
 }

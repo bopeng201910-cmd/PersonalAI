@@ -36,16 +36,12 @@ class LumioAiRouterImpl @Inject constructor(
         previousResponseId: String?,
         taskType: LumioTaskType
     ): Result<AgentResponse> {
-        val prefs = dataStore.data.first()
-        val provider = prefs[PreferencesKeys.AI_PROVIDER] ?: "openai"
-
-        Log.d(TAG, "Routing model invocation: task=$taskType, provider=$provider")
-
-        return when (provider) {
-            "local" -> executeLocalModel(conversationItems, memories, tools, taskType)
-            "ollama" -> executeOllamaModel(prefs, conversationItems, memories, tools, taskType)
-            else -> executeOpenAiModel(prefs, conversationItems, memories, tools, previousResponseId, taskType)
-        }
+        // Alpha 1.0 STRICT LOCAL-ONLY POLICY:
+        // All AI requests are strictly bound to on-device execution.
+        // Cloud AI (OpenAI Responses / chat completions / remote Ollama) is completely blocked.
+        // No stored preference or missing key can bypass this policy.
+        Log.d(TAG, "Routing model invocation (Alpha 1.0 Strict Local-Only): task=$taskType")
+        return executeLocalModel(conversationItems, memories, tools, taskType)
     }
 
     private suspend fun executeLocalModel(
@@ -56,8 +52,6 @@ class LumioAiRouterImpl @Inject constructor(
     ): Result<AgentResponse> {
         return try {
             localLlmDataSource.sendMessageWithTools(conversationItems, memories, tools)
-        } catch (cancellation: java.util.concurrent.CancellationException) {
-            throw cancellation
         } catch (cancellation: kotlinx.coroutines.CancellationException) {
             throw cancellation
         } catch (oom: OutOfMemoryError) {

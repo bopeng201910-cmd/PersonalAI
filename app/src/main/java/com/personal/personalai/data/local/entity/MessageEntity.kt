@@ -19,7 +19,7 @@ data class MessageEntity(
     val timestamp: Long = System.currentTimeMillis(),
     val hasCreatedTask: Boolean = false,
     val createdTaskTitle: String? = null,
-    @ColumnInfo(defaultValue = "default") val conversationId: String = "default"
+    @ColumnInfo(defaultValue = "'default'") val conversationId: String = "default"
 )
 
 fun MessageEntity.toDomain() = Message(

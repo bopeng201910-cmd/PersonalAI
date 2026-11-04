@@ -86,7 +86,7 @@ class WhisperDataSource @Inject constructor(
 
                         override fun onResponse(call: Call, response: Response) {
                             if (isHandled.compareAndSet(false, true)) {
-                                continuation.resume(response) { _, _, _ ->
+                                continuation.resume(response) {
                                     response.close()
                                 }
                             } else {
