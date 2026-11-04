@@ -102,14 +102,14 @@ class AgentLoopUseCase @Inject constructor(
                     else toolRegistry.getTools()
 
         // 3. Decide warm/cold and build the initial input items.
-        //    - Warm: a valid previous_response_id within CHAIN_WARM_MS. Send only the new turn.
-        //    - Cold: no chain or expired. Send the last HISTORY_WINDOW messages.
+        //    - Warm: a valid previous_response_id within CHAIN_WARM_MS for this specific conversation. Send only the new turn.
+        //    - Cold: no chain or expired. Send the last HISTORY_WINDOW messages of this active conversation.
         var previousResponseId: String? =
-            if (backgroundMode) null else readWarmChainId()
+            if (backgroundMode) null else readWarmChainId(conversationId)
         var conversationItems = if (previousResponseId != null) {
             buildWarmInput(message)
         } else {
-            buildColdInput(backgroundMode, message)
+            buildColdInput(backgroundMode, message, conversationId)
         }
 
         val baseTaskType = if (backgroundMode) {
@@ -147,9 +147,9 @@ class AgentLoopUseCase @Inject constructor(
             // because subsequent ones use a response_id we just received.
             if (response == null && iteration == 0 && previousResponseId != null) {
                 Log.w(TAG, "Chained call failed; retrying cold-start")
-                clearChainId()
+                clearChainId(conversationId)
                 previousResponseId = null
-                conversationItems = buildColdInput(backgroundMode, message)
+                conversationItems = buildColdInput(backgroundMode, message, conversationId)
                 currentCoroutineContext().ensureActive()
                 val retryResult = aiRepository.sendMessageWithTools(
                     conversationItems, memories, tools, null, effectiveTaskType
@@ -254,8 +254,8 @@ class AgentLoopUseCase @Inject constructor(
                                 conversationId = conversationId
                             )
                         )
-                        // Persist the chain id only after a successful final response.
-                        response.responseId?.let { saveChainId(it) }
+                        // Persist the chain id only after a successful final response for this conversation.
+                        response.responseId?.let { saveChainId(conversationId, it) }
                     }
                     Log.d(
                         TAG,
@@ -286,7 +286,11 @@ class AgentLoopUseCase @Inject constructor(
      * each user turn stamped with its immutable send-time. The just-saved
      * latest user message is the final item.
      */
-    private suspend fun buildColdInput(backgroundMode: Boolean, message: String): JSONArray {
+    private suspend fun buildColdInput(
+        backgroundMode: Boolean,
+        message: String,
+        conversationId: String
+    ): JSONArray {
         val items = JSONArray()
         if (backgroundMode) {
             items.put(JSONObject().apply {
@@ -295,7 +299,7 @@ class AgentLoopUseCase @Inject constructor(
             })
             return items
         }
-        val all = chatRepository.getMessages().first()
+        val all = chatRepository.getMessagesByConversation(conversationId).first()
         val startIdx = (all.size - HISTORY_WINDOW).coerceAtLeast(0)
         all.subList(startIdx, all.size).forEach { msg ->
             items.put(JSONObject().apply {
@@ -313,26 +317,32 @@ class AgentLoopUseCase @Inject constructor(
         return items
     }
 
-    // ── Chain-id persistence ──────────────────────────────────────────────────
+    // ── Chain-id persistence (scoped per conversation) ────────────────────────
 
-    private suspend fun readWarmChainId(): String? {
+    private fun chainKey(conversationId: String): androidx.datastore.preferences.core.Preferences.Key<String> =
+        androidx.datastore.preferences.core.stringPreferencesKey("last_response_id_$conversationId")
+
+    private fun chainAtKey(conversationId: String): androidx.datastore.preferences.core.Preferences.Key<Long> =
+        androidx.datastore.preferences.core.longPreferencesKey("last_response_at_ms_$conversationId")
+
+    private suspend fun readWarmChainId(conversationId: String): String? {
         val prefs = dataStore.data.first()
-        val id = prefs[PreferencesKeys.LAST_RESPONSE_ID]?.takeIf { it.isNotBlank() } ?: return null
-        val at = prefs[PreferencesKeys.LAST_RESPONSE_AT_MS] ?: return null
+        val id = prefs[chainKey(conversationId)]?.takeIf { it.isNotBlank() } ?: return null
+        val at = prefs[chainAtKey(conversationId)] ?: return null
         return if (System.currentTimeMillis() - at < CHAIN_WARM_MS) id else null
     }
 
-    private suspend fun saveChainId(id: String) {
+    private suspend fun saveChainId(conversationId: String, id: String) {
         dataStore.edit { prefs ->
-            prefs[PreferencesKeys.LAST_RESPONSE_ID] = id
-            prefs[PreferencesKeys.LAST_RESPONSE_AT_MS] = System.currentTimeMillis()
+            prefs[chainKey(conversationId)] = id
+            prefs[chainAtKey(conversationId)] = System.currentTimeMillis()
         }
     }
 
-    private suspend fun clearChainId() {
+    private suspend fun clearChainId(conversationId: String) {
         dataStore.edit { prefs ->
-            prefs.remove(PreferencesKeys.LAST_RESPONSE_ID)
-            prefs.remove(PreferencesKeys.LAST_RESPONSE_AT_MS)
+            prefs.remove(chainKey(conversationId))
+            prefs.remove(chainAtKey(conversationId))
         }
     }
 
