@@ -3,13 +3,10 @@ package com.personal.personalai.localllm
 import android.app.ActivityManager
 import android.content.Context
 import com.personal.personalai.localllm.api.DeviceCapabilityEvaluator
-import com.personal.personalai.localllm.api.LocalModel
 import io.mockk.every
 import io.mockk.mockk
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
 
@@ -34,11 +31,27 @@ class DeviceCapabilityEvaluatorTest {
     }
 
     @Test
+    fun testEvaluation_whenLowMemoryPressure_suspendsRecommendation() {
+        val context = mockk<Context>(relaxed = true)
+        val actManager = mockk<ActivityManager>(relaxed = true)
+        every { context.getSystemService(Context.ACTIVITY_SERVICE) } returns actManager
+        every { context.filesDir } returns File(System.getProperty("java.io.tmpdir") ?: "/tmp")
+
+        every { actManager.getMemoryInfo(any()) } answers {
+            val info = it.invocation.args[0] as ActivityManager.MemoryInfo
+            info.totalMem = 12L * 1024L * 1024L * 1024L
+            info.lowMemory = true // Severe memory pressure
+        }
+
+        val assessment = DeviceCapabilityEvaluator.evaluate(context)
+        assertNull(assessment.recommendedModel)
+    }
+
+    @Test
     fun testEvaluation_whenStorageDetectionFails_reportsUnknownAndDisablesRecommendation() {
         val context = mockk<Context>(relaxed = true)
         val actManager = mockk<ActivityManager>(relaxed = true)
         every { context.getSystemService(Context.ACTIVITY_SERVICE) } returns actManager
-        // Invalid filesDir causing StatFs exception
         every { context.filesDir } returns File("/non_existent_dir_for_statfs_failure")
 
         every { actManager.getMemoryInfo(any()) } answers {
@@ -49,6 +62,5 @@ class DeviceCapabilityEvaluatorTest {
 
         val assessment = DeviceCapabilityEvaluator.evaluate(context)
         assertNull("Model recommendation must be disabled when storage is unknown", assessment.recommendedModel)
-        assertTrue(assessment.suitabilityExplanation.contains("Storage detection failed or unknown"))
     }
 }

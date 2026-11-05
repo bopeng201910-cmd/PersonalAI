@@ -49,6 +49,12 @@ object DeviceCapabilityEvaluator {
         val is12GbBaseline = totalRamGb >= 10.5
 
         val (recommended, explanation) = when {
+            !isApi36 -> {
+                Pair(
+                    null,
+                    "Android 16 (API 36+) is required for Lumio Alpha 1.0 local inference. Current device is API $apiLevel."
+                )
+            }
             availableStorage == null || availableStorageGb < 0 -> {
                 Pair(
                     null,
@@ -61,28 +67,28 @@ object DeviceCapabilityEvaluator {
                     "Below Alpha 1.0 12GB RAM baseline (detected ${"%.1f".format(totalRamGb)} GB). Local model execution disabled to prevent system instability."
                 )
             }
-            availableStorageGb < 4.0 -> {
-                Pair(
-                    null,
-                    "Insufficient storage space (${"%.1f".format(availableStorageGb)} GB available). At least 4.0 GB required for model weights and cache."
-                )
-            }
             isLowMemory -> {
                 Pair(
-                    LocalModel.QWEN_2_5_1_5B,
-                    "Device memory pressure detected. Recommending compact Qwen 2.5 1.5B."
+                    null,
+                    "Device is currently under severe memory pressure. Local model execution suspended to prevent system OOM."
+                )
+            }
+            availableStorageGb < 4.5 -> {
+                Pair(
+                    null,
+                    "Insufficient storage space (${"%.1f".format(availableStorageGb)} GB available). At least 4.5 GB required for model staging, weights, and runtime cache."
                 )
             }
             availableStorageGb >= 7.0 -> {
                 Pair(
                     LocalModel.GEMMA_4_E2B,
-                    "12GB baseline validated. Recommended default: Gemma 4 E2B for optimal quality and balanced power consumption."
+                    "12GB baseline and API 36 validated. Recommended default: Gemma 4 E2B for balanced response quality and power efficiency."
                 )
             }
             else -> {
                 Pair(
                     LocalModel.QWEN_2_5_1_5B,
-                    "12GB baseline validated. Recommended compact model: Qwen 2.5 1.5B."
+                    "12GB baseline and API 36 validated. Recommended compact model: Qwen 2.5 1.5B."
                 )
             }
         }

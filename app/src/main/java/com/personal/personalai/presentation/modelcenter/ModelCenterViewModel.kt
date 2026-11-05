@@ -21,11 +21,23 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+enum class ModelStatus {
+    NOT_DOWNLOADED,
+    DOWNLOADING,
+    VERIFYING,
+    INSTALLED,
+    LOADING,
+    ACTIVE,
+    LOAD_FAILED,
+    UNAVAILABLE
+}
+
 data class ModelCardUiState(
     val model: LocalModel,
     val isDownloaded: Boolean = false,
     val isDownloading: Boolean = false,
     val isSelected: Boolean = false,
+    val status: ModelStatus = ModelStatus.NOT_DOWNLOADED,
     val downloadPercent: Int = 0,
     val error: String? = null
 )
@@ -74,10 +86,18 @@ class ModelCenterViewModel @Inject constructor(
 
     fun loadModelStatuses() {
         val models = LocalModel.entries.map { model ->
+            val isDownloaded = ModelDownloadManager.isDownloaded(context, model)
+            val isSelected = model.modelId == _uiState.value.activeModelId
+            val status = when {
+                !isDownloaded -> ModelStatus.NOT_DOWNLOADED
+                isSelected -> ModelStatus.ACTIVE
+                else -> ModelStatus.INSTALLED
+            }
             ModelCardUiState(
                 model = model,
-                isDownloaded = ModelDownloadManager.isDownloaded(context, model),
-                isSelected = model.modelId == _uiState.value.activeModelId
+                isDownloaded = isDownloaded,
+                isSelected = isSelected,
+                status = status
             )
         }
         _uiState.update { it.copy(models = models) }
@@ -85,6 +105,14 @@ class ModelCenterViewModel @Inject constructor(
 
     fun selectModel(model: LocalModel) {
         viewModelScope.launch {
+            // Confirm model is downloaded and verified before marking active
+            if (!ModelDownloadManager.isDownloaded(context, model)) {
+                _uiState.update {
+                    it.copy(error = "Cannot activate '${model.displayName}'. Model must be downloaded and verified first.")
+                }
+                return@launch
+            }
+
             dataStore.edit { it[PreferencesKeys.LOCAL_MODEL] = model.modelId }
             _uiState.update {
                 it.copy(
