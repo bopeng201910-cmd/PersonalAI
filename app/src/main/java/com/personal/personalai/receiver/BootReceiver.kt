@@ -23,8 +23,11 @@ class BootReceiver : BroadcastReceiver() {
             try {
                 geofenceManager.registerAll()
                 Log.d(TAG, "Geofences re-registered after boot")
+                // Reschedule proactive check-in WorkManager tasks
+                com.personal.personalai.worker.ProactiveCheckInWorker.scheduleNextCheckIn(context)
+                Log.d(TAG, "Proactive check-in rescheduled after boot")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to re-register geofences: ${e.message}")
+                Log.e(TAG, "Failed to re-register on boot: ${e.message}")
             } finally {
                 pendingResult.finish()
             }

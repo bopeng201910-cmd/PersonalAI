@@ -48,5 +48,13 @@ data class SettingsUiState(
     /** Serper.dev API key — used by WebSearchTool for real Google results. */
     val serperApiKey: String = "",
     val isSerperSaving: Boolean = false,
-    val serperSavedSuccessfully: Boolean = false
+    val serperSavedSuccessfully: Boolean = false,
+
+    // ── Proactive Conversation Check-in ───────────────────────────────────────
+    val isProactiveEnabled: Boolean = false,
+    val proactiveMorningTime: String = "09:00",
+    val proactiveEveningTime: String = "20:00",
+    val proactiveQuietStart: String = "22:00",
+    val proactiveQuietEnd: String = "07:00",
+    val isProactiveFollowupEnabled: Boolean = true
 )

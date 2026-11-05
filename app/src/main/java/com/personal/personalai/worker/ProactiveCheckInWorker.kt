@@ -30,9 +30,22 @@ class ProactiveCheckInWorker @AssistedInject constructor(
     companion object {
         private const val TAG = "ProactiveCheckInWorker"
         const val CHANNEL_ID = "proactive_check_in"
+        const val WORK_NAME = "proactive_check_in_work"
         const val KEY_IS_ENABLED = "is_enabled"
         const val KEY_QUIET_START = "quiet_start"
         const val KEY_QUIET_END = "quiet_end"
+
+        fun scheduleNextCheckIn(context: Context) {
+            val workRequest = androidx.work.PeriodicWorkRequestBuilder<ProactiveCheckInWorker>(
+                12, java.util.concurrent.TimeUnit.HOURS
+            ).build()
+
+            androidx.work.WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+                WORK_NAME,
+                androidx.work.ExistingPeriodicWorkPolicy.KEEP,
+                workRequest
+            )
+        }
     }
 
     override suspend fun doWork(): Result {

@@ -41,6 +41,7 @@ class ContinuousVoiceManager @Inject constructor(
     private var activeTurnJob: Job? = null
     private var interruptionAudioRecordJob: Job? = null
     var onSpeechSubmitted: ((String) -> Unit)? = null
+    var onUserInterruption: (() -> Unit)? = null
 
     init {
         updateVadThresholdForMode(_conversationMode.value)
@@ -105,10 +106,13 @@ class ContinuousVoiceManager @Inject constructor(
         // 1. Interruption check: User speaking while AI is playing TTS
         if (isAiSpeaking && amplitude > 3000) {
             Log.i(TAG, "User interruption detected! Halting TTS immediately.")
+            stopInterruptionMonitor()
             ttsEngine.stop()
             activeTurnJob?.cancel()
+            onUserInterruption?.invoke()
             vad.reset()
             _voiceState.value = ContinuousVoiceState.LISTENING
+            startListeningForTurn()
             return
         }
 

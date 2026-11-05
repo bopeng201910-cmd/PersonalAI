@@ -38,6 +38,14 @@ object PreferencesKeys {
 
     // Daily Memory Review cursor tracking
     val LAST_REVIEWED_MESSAGE_ID = longPreferencesKey("last_reviewed_message_id")
+
+    // Proactive Check-in preferences
+    val PROACTIVE_ENABLED        = androidx.datastore.preferences.core.booleanPreferencesKey("proactive_enabled")
+    val PROACTIVE_MORNING_TIME   = stringPreferencesKey("proactive_morning_time")
+    val PROACTIVE_EVENING_TIME   = stringPreferencesKey("proactive_evening_time")
+    val PROACTIVE_QUIET_START    = stringPreferencesKey("proactive_quiet_start")
+    val PROACTIVE_QUIET_END      = stringPreferencesKey("proactive_quiet_end")
+    val PROACTIVE_FOLLOWUP_ENABLED = androidx.datastore.preferences.core.booleanPreferencesKey("proactive_followup_enabled")
 }
 
 @HiltViewModel
@@ -60,11 +68,11 @@ class SettingsViewModel @Inject constructor(
     private fun loadSettings() {
         viewModelScope.launch {
             dataStore.data.collect { preferences ->
-                val providerStr = preferences[PreferencesKeys.AI_PROVIDER] ?: "openai"
+                val providerStr = preferences[PreferencesKeys.AI_PROVIDER] ?: "local"
                 val provider = when (providerStr) {
                     "ollama" -> AiProvider.OLLAMA
-                    "local"  -> AiProvider.LOCAL
-                    else     -> AiProvider.OPENAI
+                    "openai" -> AiProvider.OPENAI
+                    else     -> AiProvider.LOCAL
                 }
 
                 _uiState.update {
@@ -76,9 +84,43 @@ class SettingsViewModel @Inject constructor(
                         serperApiKey       = preferences[PreferencesKeys.SERPER_API_KEY] ?: "",
                         localSelectedModel = preferences[PreferencesKeys.LOCAL_MODEL]
                                                 ?: LocalModel.GEMMA_4_E2B.modelId,
-                        hfToken            = preferences[PreferencesKeys.HF_TOKEN] ?: ""
+                        hfToken            = preferences[PreferencesKeys.HF_TOKEN] ?: "",
+                        isProactiveEnabled = preferences[PreferencesKeys.PROACTIVE_ENABLED] ?: false,
+                        proactiveMorningTime = preferences[PreferencesKeys.PROACTIVE_MORNING_TIME] ?: "09:00",
+                        proactiveEveningTime = preferences[PreferencesKeys.PROACTIVE_EVENING_TIME] ?: "20:00",
+                        proactiveQuietStart = preferences[PreferencesKeys.PROACTIVE_QUIET_START] ?: "22:00",
+                        proactiveQuietEnd   = preferences[PreferencesKeys.PROACTIVE_QUIET_END] ?: "07:00",
+                        isProactiveFollowupEnabled = preferences[PreferencesKeys.PROACTIVE_FOLLOWUP_ENABLED] ?: true
                     )
                 }
+            }
+        }
+    }
+
+    // ── Proactive Check-in settings ───────────────────────────────────────────
+
+    fun toggleProactiveEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            dataStore.edit { it[PreferencesKeys.PROACTIVE_ENABLED] = enabled }
+            _uiState.update { it.copy(isProactiveEnabled = enabled) }
+        }
+    }
+
+    fun setProactiveTimes(morning: String, evening: String, quietStart: String, quietEnd: String) {
+        viewModelScope.launch {
+            dataStore.edit {
+                it[PreferencesKeys.PROACTIVE_MORNING_TIME] = morning
+                it[PreferencesKeys.PROACTIVE_EVENING_TIME] = evening
+                it[PreferencesKeys.PROACTIVE_QUIET_START] = quietStart
+                it[PreferencesKeys.PROACTIVE_QUIET_END] = quietEnd
+            }
+            _uiState.update {
+                it.copy(
+                    proactiveMorningTime = morning,
+                    proactiveEveningTime = evening,
+                    proactiveQuietStart = quietStart,
+                    proactiveQuietEnd = quietEnd
+                )
             }
         }
     }

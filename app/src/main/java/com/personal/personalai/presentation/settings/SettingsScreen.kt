@@ -44,6 +44,7 @@ import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -276,6 +277,74 @@ fun SettingsScreen(
                             } else {
                                 Text(stringResource(R.string.save))
                             }
+                        }
+                    }
+                }
+            }
+
+            // ── Proactive Check-in card ───────────────────────────────────────
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Proactive Conversation", style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                "Allow Lumio to initiate check-ins and memory follow-ups.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = uiState.isProactiveEnabled,
+                            onCheckedChange = { viewModel.toggleProactiveEnabled(it) }
+                        )
+                    }
+
+                    if (uiState.isProactiveEnabled) {
+                        OutlinedTextField(
+                            value = uiState.proactiveMorningTime,
+                            onValueChange = {
+                                viewModel.setProactiveTimes(it, uiState.proactiveEveningTime, uiState.proactiveQuietStart, uiState.proactiveQuietEnd)
+                            },
+                            label = { Text("Morning Check-in Time") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = uiState.proactiveEveningTime,
+                            onValueChange = {
+                                viewModel.setProactiveTimes(uiState.proactiveMorningTime, it, uiState.proactiveQuietStart, uiState.proactiveQuietEnd)
+                            },
+                            label = { Text("Evening Check-in Time") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                value = uiState.proactiveQuietStart,
+                                onValueChange = {
+                                    viewModel.setProactiveTimes(uiState.proactiveMorningTime, uiState.proactiveEveningTime, it, uiState.proactiveQuietEnd)
+                                },
+                                label = { Text("Quiet Hours Start") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true
+                            )
+                            OutlinedTextField(
+                                value = uiState.proactiveQuietEnd,
+                                onValueChange = {
+                                    viewModel.setProactiveTimes(uiState.proactiveMorningTime, uiState.proactiveEveningTime, uiState.proactiveQuietStart, it)
+                                },
+                                label = { Text("Quiet Hours End") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true
+                            )
                         }
                     }
                 }

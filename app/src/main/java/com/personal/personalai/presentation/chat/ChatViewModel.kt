@@ -82,6 +82,10 @@ class ChatViewModel @Inject constructor(
                     sendMessage()
                 }
             }
+            cvm.onUserInterruption = {
+                // When user interrupts playback, immediately cancel active message generation job as well
+                cancelCurrentMessage()
+            }
             viewModelScope.launch {
                 cvm.voiceState.collect { state ->
                     _uiState.update { it.copy(continuousVoiceState = state) }
