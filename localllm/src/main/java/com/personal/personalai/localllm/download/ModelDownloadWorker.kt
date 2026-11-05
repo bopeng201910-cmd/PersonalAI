@@ -48,6 +48,15 @@ class ModelDownloadWorker(
         val tmpFile  = File(destFile.parent, "${destFile.name}.tmp")
         destFile.parentFile?.mkdirs()
 
+        // 1. Storage validation: Ensure at least model size + 500MB safety buffer is available
+        val freeSpace = destFile.parentFile?.usableSpace ?: 0L
+        val requiredSpace = model.approximateSizeBytes + (500L * 1024L * 1024L)
+        if (freeSpace < requiredSpace) {
+            return Result.failure(
+                workDataOf(KEY_ERROR to "Insufficient storage space. Need at least ${(requiredSpace / (1024 * 1024))} MB.")
+            )
+        }
+
         return try {
             downloadFile(
                 urlStr        = downloadUrl(model.huggingFaceRepo, model.fileName),
@@ -55,6 +64,14 @@ class ModelDownloadWorker(
                 dest          = tmpFile,
                 expectedBytes = model.approximateSizeBytes
             )
+
+            // 2. File size validation: Reject incomplete downloads
+            if (tmpFile.length() < (model.approximateSizeBytes / 2)) {
+                tmpFile.delete()
+                return Result.failure(workDataOf(KEY_ERROR to "Downloaded file size is corrupted or truncated."))
+            }
+
+            // 3. Atomic rename only after verification passes
             tmpFile.renameTo(destFile)
             Result.success()
         } catch (e: Exception) {

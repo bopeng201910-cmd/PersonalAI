@@ -7,4 +7,5 @@ sealed class Screen(val route: String) {
     object Library : Screen("library")
     object Settings : Screen("settings")
     object ApiUsage : Screen("api_usage")
+    object ModelCenter : Screen("model_center")
 }

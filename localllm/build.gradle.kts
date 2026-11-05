@@ -45,4 +45,8 @@ dependencies {
 
     // LiveData (for WorkManager progress observation in ModelDownloadManager)
     implementation(libs.androidx.lifecycle.runtime.compose)
+
+    // Unit Tests
+    testImplementation(libs.junit)
+    testImplementation(libs.mockk)
 }

@@ -17,12 +17,14 @@ import com.personal.personalai.domain.repository.ChatRepository
 import com.personal.personalai.domain.usecase.GenerateProactiveConversationUseCase
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
+import kotlinx.coroutines.flow.first
 import java.time.LocalTime
 
 @HiltWorker
 class ProactiveCheckInWorker @AssistedInject constructor(
     @Assisted private val context: Context,
     @Assisted workerParams: WorkerParameters,
+    private val dataStore: androidx.datastore.core.DataStore<androidx.datastore.preferences.core.Preferences>,
     private val generateProactiveConversationUseCase: GenerateProactiveConversationUseCase,
     private val chatRepository: ChatRepository
 ) : CoroutineWorker(context, workerParams) {
@@ -35,9 +37,35 @@ class ProactiveCheckInWorker @AssistedInject constructor(
         const val KEY_QUIET_START = "quiet_start"
         const val KEY_QUIET_END = "quiet_end"
 
-        fun scheduleNextCheckIn(context: Context, initialDelayMinutes: Long = 0) {
+        fun calculateDelayToNextCheckIn(morningTimeStr: String, eveningTimeStr: String): Long {
+            val now = java.time.LocalTime.now()
+            val morning = runCatching { java.time.LocalTime.parse(morningTimeStr) }.getOrDefault(java.time.LocalTime.of(9, 0))
+            val evening = runCatching { java.time.LocalTime.parse(eveningTimeStr) }.getOrDefault(java.time.LocalTime.of(20, 0))
+
+            val nextTarget = when {
+                now.isBefore(morning) -> morning
+                now.isBefore(evening) -> evening
+                else -> morning // next morning
+            }
+
+            val targetMinutes = nextTarget.toSecondOfDay() / 60
+            val nowMinutes = now.toSecondOfDay() / 60
+            val diffMinutes = if (targetMinutes > nowMinutes) {
+                targetMinutes - nowMinutes
+            } else {
+                (24 * 60) - (nowMinutes - targetMinutes)
+            }
+            return diffMinutes.toLong().coerceAtLeast(1L)
+        }
+
+        fun scheduleNextCheckIn(
+            context: Context,
+            morningTime: String = "09:00",
+            eveningTime: String = "20:00"
+        ) {
+            val delayMinutes = calculateDelayToNextCheckIn(morningTime, eveningTime)
             val workRequest = androidx.work.OneTimeWorkRequestBuilder<ProactiveCheckInWorker>()
-                .setInitialDelay(initialDelayMinutes, java.util.concurrent.TimeUnit.MINUTES)
+                .setInitialDelay(delayMinutes, java.util.concurrent.TimeUnit.MINUTES)
                 .build()
 
             androidx.work.WorkManager.getInstance(context).enqueueUniqueWork(
@@ -49,12 +77,21 @@ class ProactiveCheckInWorker @AssistedInject constructor(
     }
 
     override suspend fun doWork(): Result {
-        val isEnabled = inputData.getBoolean(KEY_IS_ENABLED, true)
-        val quietStart = inputData.getString(KEY_QUIET_START) ?: "22:00"
-        val quietEnd = inputData.getString(KEY_QUIET_END) ?: "07:00"
+        val prefs = dataStore.data.first()
+        val isEnabled = prefs[com.personal.personalai.presentation.settings.PreferencesKeys.PROACTIVE_ENABLED] ?: false
+        val morningTime = prefs[com.personal.personalai.presentation.settings.PreferencesKeys.PROACTIVE_MORNING_TIME] ?: "09:00"
+        val eveningTime = prefs[com.personal.personalai.presentation.settings.PreferencesKeys.PROACTIVE_EVENING_TIME] ?: "20:00"
+        val quietStart = prefs[com.personal.personalai.presentation.settings.PreferencesKeys.PROACTIVE_QUIET_START] ?: "22:00"
+        val quietEnd = prefs[com.personal.personalai.presentation.settings.PreferencesKeys.PROACTIVE_QUIET_END] ?: "07:00"
+
+        if (!isEnabled) {
+            return Result.success()
+        }
 
         val config = ProactiveCheckInConfig(
-            isEnabled = isEnabled,
+            isEnabled = true,
+            morningTime = morningTime,
+            eveningTime = eveningTime,
             quietHoursStart = quietStart,
             quietHoursEnd = quietEnd
         )
@@ -75,6 +112,9 @@ class ProactiveCheckInWorker @AssistedInject constructor(
 
         // Post non-intrusive notification without unsolicited microphone activation
         showNotification(promptText)
+
+        // Reschedule next occurrence (e.g. morning -> evening or evening -> morning)
+        scheduleNextCheckIn(context, morningTime, eveningTime)
 
         return Result.success()
     }

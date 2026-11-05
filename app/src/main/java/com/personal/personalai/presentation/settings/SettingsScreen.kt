@@ -66,6 +66,7 @@ import com.personal.personalai.localllm.engine.LiteRtLlmEngine
 fun SettingsScreen(
     onNavigateBack: () -> Unit,
     onNavigateToApiUsage: () -> Unit = {},
+    onNavigateToModelCenter: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -110,6 +111,13 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.primary
                     )
+
+                    Button(
+                        onClick = onNavigateToModelCenter,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Open Lumio Model Center")
+                    }
 
                     LocalAiSection(uiState = uiState, viewModel = viewModel)
                 }

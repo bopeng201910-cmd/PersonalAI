@@ -201,21 +201,28 @@ class ContinuousVoiceManager @Inject constructor(
                 )
 
                 if (audioRecord.state == android.media.AudioRecord.STATE_INITIALIZED) {
-                    audioRecord.startRecording()
-                    val buffer = ShortArray(minBufSize)
-                    while (isActive && _voiceState.value == ContinuousVoiceState.SPEAKING) {
-                        val read = audioRecord.read(buffer, 0, buffer.size)
-                        if (read > 0) {
-                            var maxAmp = 0
-                            for (i in 0 until read) {
-                                val absVal = java.lang.Math.abs(buffer[i].toInt())
-                                if (absVal > maxAmp) maxAmp = absVal
+                    try {
+                        audioRecord.startRecording()
+                        val buffer = ShortArray(minBufSize)
+                        while (isActive && _voiceState.value == ContinuousVoiceState.SPEAKING) {
+                            val read = audioRecord.read(buffer, 0, buffer.size)
+                            if (read > 0) {
+                                var maxAmp = 0
+                                for (i in 0 until read) {
+                                    val absVal = java.lang.Math.abs(buffer[i].toInt())
+                                    if (absVal > maxAmp) maxAmp = absVal
+                                }
+                                onAudioFrame(maxAmp)
                             }
-                            onAudioFrame(maxAmp)
                         }
+                    } finally {
+                        try {
+                            audioRecord.stop()
+                        } catch (e: Exception) {
+                            Log.w(TAG, "AudioRecord stop exception: ${e.message}")
+                        }
+                        audioRecord.release()
                     }
-                    audioRecord.stop()
-                    audioRecord.release()
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Interruption audio monitor exception: ${e.message}")
