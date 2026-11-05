@@ -23,6 +23,7 @@ data class ChatUiState(
     val isBluetoothConnected: Boolean = false,
     val isContinuousModeActive: Boolean = false,
     val conversationMode: com.personal.personalai.domain.audio.ConversationMode = com.personal.personalai.domain.audio.ConversationMode.NATURAL_CONVERSATION,
+    val avatarState: com.personal.personalai.domain.avatar.AvatarState = com.personal.personalai.domain.avatar.AvatarState(),
     val agentStatusMessage: String? = null,
     /** Non-null when the agent loop is paused waiting for the user to answer a question. */
     val pendingInputRequest: UserInputBroker.Request? = null,

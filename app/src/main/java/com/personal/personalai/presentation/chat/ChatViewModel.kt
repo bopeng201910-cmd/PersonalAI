@@ -42,7 +42,8 @@ class ChatViewModel @Inject constructor(
     private val chatRepository: ChatRepository,
     @ApplicationContext private val context: Context,
     private val continuousVoiceManager: com.personal.personalai.data.audio.ContinuousVoiceManager? = null,
-    private val bluetoothHeadsetManager: com.personal.personalai.domain.audio.BluetoothHeadsetManager? = null
+    private val bluetoothHeadsetManager: com.personal.personalai.domain.audio.BluetoothHeadsetManager? = null,
+    private val lipSyncEngine: com.personal.personalai.data.avatar.SpeechLipSyncEngine? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ChatUiState())
@@ -65,6 +66,17 @@ class ChatViewModel @Inject constructor(
         observePendingReviewCount()
         checkNewMessagesForMemoryReview()
         observeContinuousVoice()
+        observeAvatarLipSync()
+    }
+
+    private fun observeAvatarLipSync() {
+        lipSyncEngine?.let { engine ->
+            viewModelScope.launch {
+                engine.avatarState.collect { state ->
+                    _uiState.update { it.copy(avatarState = state) }
+                }
+            }
+        }
     }
 
     private fun observeContinuousVoice() {
@@ -89,6 +101,11 @@ class ChatViewModel @Inject constructor(
             viewModelScope.launch {
                 cvm.voiceState.collect { state ->
                     _uiState.update { it.copy(continuousVoiceState = state) }
+                    if (state == com.personal.personalai.domain.audio.ContinuousVoiceState.SPEAKING) {
+                        lipSyncEngine?.onSpeechStarted()
+                    } else {
+                        lipSyncEngine?.onSpeechCompleted()
+                    }
                 }
             }
             viewModelScope.launch {

@@ -18,6 +18,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import com.personal.personalai.presentation.avatar.AvatarView
 import com.personal.personalai.presentation.common.MarkdownText
 import androidx.compose.foundation.background
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -259,6 +260,39 @@ fun ChatScreen(
                     .fillMaxSize()
                     .padding(scaffoldPadding)
             ) {
+                // Batch 4: 2.2D Realistic Avatar & Mode Selection Bar
+                if (uiState.isContinuousModeActive) {
+                    AvatarView(
+                        avatarState = uiState.avatarState,
+                        modifier = Modifier
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                            .fillMaxWidth()
+                    )
+
+                    // Three selectable conversation modes
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        com.personal.personalai.domain.audio.ConversationMode.entries.forEach { mode ->
+                            val isSelected = uiState.conversationMode == mode
+                            val label = when (mode) {
+                                com.personal.personalai.domain.audio.ConversationMode.NATURAL_CONVERSATION -> "Natural"
+                                com.personal.personalai.domain.audio.ConversationMode.ACTIVE_INTERACTION -> "Active"
+                                com.personal.personalai.domain.audio.ConversationMode.FULL_LISTENING -> "Listening"
+                            }
+                            androidx.compose.material3.FilterChip(
+                                selected = isSelected,
+                                onClick = { viewModel.setConversationMode(mode) },
+                                label = { Text(label, style = MaterialTheme.typography.labelSmall) },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                }
+
                 if (uiState.messages.isEmpty() && !uiState.isLoading) {
                     WelcomePlaceholder(modifier = Modifier.weight(1f))
                 } else {
