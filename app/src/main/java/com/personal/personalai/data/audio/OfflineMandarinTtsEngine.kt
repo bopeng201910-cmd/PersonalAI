@@ -39,22 +39,20 @@ class OfflineMandarinTtsEngine @Inject constructor(
                     engine?.setLanguage(Locale.CHINESE)
                 }
 
-                // Explicit verification that selected voice does not require network connection
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
-                    val currentVoice = engine?.voice
-                    if (currentVoice != null && currentVoice.isNetworkConnectionRequired) {
-                        Log.e(TAG, "Selected TTS voice requires network connection! Rejecting cloud voice.")
-                        // Find an offline voice if available
-                        val offlineVoice = engine.voices?.firstOrNull {
-                            (it.locale == Locale.SIMPLIFIED_CHINESE || it.locale == Locale.CHINESE) &&
-                            !it.isNetworkConnectionRequired
-                        }
-                        if (offlineVoice != null) {
-                            engine.voice = offlineVoice
-                            Log.d(TAG, "Selected offline Mandarin voice: ${offlineVoice.name}")
-                        } else {
-                            Log.w(TAG, "No strictly offline Mandarin voice found in TTS engine.")
-                        }
+                // Explicit verification that selected voice does not require network connection (Android 16 baseline)
+                val currentVoice = engine?.voice
+                if (currentVoice != null && currentVoice.isNetworkConnectionRequired) {
+                    Log.e(TAG, "Selected TTS voice requires network connection! Rejecting cloud voice.")
+                    // Find an offline voice if available
+                    val offlineVoice = engine.voices?.firstOrNull {
+                        (it.locale == Locale.SIMPLIFIED_CHINESE || it.locale == Locale.CHINESE) &&
+                        !it.isNetworkConnectionRequired
+                    }
+                    if (offlineVoice != null) {
+                        engine.voice = offlineVoice
+                        Log.d(TAG, "Selected offline Mandarin voice: ${offlineVoice.name}")
+                    } else {
+                        Log.w(TAG, "No strictly offline Mandarin voice found in TTS engine.")
                     }
                 }
 

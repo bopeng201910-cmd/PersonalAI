@@ -12,7 +12,7 @@ android {
 
     defaultConfig {
         applicationId = "com.personal.personalai"
-        minSdk = 28
+        minSdk = 36
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"

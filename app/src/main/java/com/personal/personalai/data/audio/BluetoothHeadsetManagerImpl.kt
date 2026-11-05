@@ -75,18 +75,13 @@ class BluetoothHeadsetManagerImpl @Inject constructor(
     }
 
     private fun checkConnectedDevices() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            val devices = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS or AudioManager.GET_DEVICES_OUTPUTS)
-            val hasBt = devices.any {
-                it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
-                it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
-                (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && it.type == AudioDeviceInfo.TYPE_BLE_HEADSET)
-            }
-            _isHeadsetConnected.value = hasBt
-        } else {
-            @Suppress("DEPRECATION")
-            _isHeadsetConnected.value = audioManager.isBluetoothScoAvailableOffCall
+        val devices = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS or AudioManager.GET_DEVICES_OUTPUTS)
+        val hasBt = devices.any {
+            it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+            it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+            it.type == AudioDeviceInfo.TYPE_BLE_HEADSET
         }
+        _isHeadsetConnected.value = hasBt
     }
 
     private fun registerReceivers() {
