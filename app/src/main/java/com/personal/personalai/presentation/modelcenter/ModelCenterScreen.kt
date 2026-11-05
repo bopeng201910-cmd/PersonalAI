@@ -91,7 +91,7 @@ fun ModelCenterScreen(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                             Spacer(Modifier.width(8.dp))
-                            Text("Device Assessment (HONOR 500 Baseline)", style = MaterialTheme.typography.titleMedium)
+                            Text("Device Capability Assessment (12GB Baseline)", style = MaterialTheme.typography.titleMedium)
                         }
                         val assess = uiState.deviceAssessment
                         if (assess != null) {

@@ -120,6 +120,13 @@ class ModelCenterViewModel @Inject constructor(
     }
 
     fun deleteModel(model: LocalModel) {
+        // Guard: Prevent removal of the currently active model
+        if (model.modelId == _uiState.value.activeModelId) {
+            _uiState.update {
+                it.copy(error = "Cannot remove active model '${model.displayName}'. Please switch to another model first.")
+            }
+            return
+        }
         ModelDownloadManager.deleteModel(context, model)
         updateModel(model) { it.copy(isDownloaded = false, downloadPercent = 0) }
         _uiState.update { it.copy(infoMessage = "Removed model ${model.displayName} from storage.") }

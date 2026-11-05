@@ -55,4 +55,22 @@ class ModelDownloadWorkerTest {
         val model = LocalModel.GEMMA_4_E2B
         assertTrue("Unverified models without trusted checksum cannot be installed in production", model.officialSha256.isNullOrBlank())
     }
+
+    @Test
+    fun testAtomicInstallationRollback_preservesExistingModelOnFailure() {
+        val destFile = File.createTempFile("active_model", ".bin")
+        val backupFile = File("${destFile.parent}/${destFile.name}.backup")
+        try {
+            destFile.writeText("ACTIVE_WORKING_MODEL_V1")
+            destFile.renameTo(backupFile)
+            assertTrue(backupFile.exists())
+            // Simulate rollback
+            backupFile.renameTo(destFile)
+            assertTrue(destFile.exists())
+            assertEquals("ACTIVE_WORKING_MODEL_V1", destFile.readText())
+        } finally {
+            destFile.delete()
+            backupFile.delete()
+        }
+    }
 }

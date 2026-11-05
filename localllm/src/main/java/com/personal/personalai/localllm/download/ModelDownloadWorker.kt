@@ -45,7 +45,7 @@ class ModelDownloadWorker(
             ?: return Result.failure(workDataOf(KEY_ERROR to "Unknown model ID: $modelId"))
 
         val destFile = ModelDownloadManager.modelFile(applicationContext, model)
-        val tmpFile  = File(destFile.parent, "${destFile.name}.tmp")
+        val stagingFile = File(destFile.parent, "${destFile.name}.download_${System.currentTimeMillis()}")
         destFile.parentFile?.mkdirs()
 
         // 1. Production checksum requirement: Reject download if trusted checksum is missing
@@ -68,41 +68,48 @@ class ModelDownloadWorker(
             downloadFile(
                 urlStr        = downloadUrl(model.huggingFaceRepo, model.fileName),
                 hfToken       = hfToken,
-                dest          = tmpFile,
+                dest          = stagingFile,
                 expectedBytes = model.approximateSizeBytes
             )
 
             if (isStopped) {
-                tmpFile.delete()
+                stagingFile.delete()
                 return Result.failure(workDataOf(KEY_ERROR to "Download cancelled by user or WorkManager."))
             }
 
             // 3. File size validation: Reject zero-byte or truncated downloads
-            val actualLength = tmpFile.length()
+            val actualLength = stagingFile.length()
             if (actualLength <= 0L) {
-                tmpFile.delete()
+                stagingFile.delete()
                 return Result.failure(workDataOf(KEY_ERROR to "Downloaded file is empty."))
             }
 
             // 4. SHA-256 Checksum validation against trusted checksum
-            val computedHash = computeSha256(tmpFile)
+            val computedHash = computeSha256(stagingFile)
             if (!computedHash.equals(model.officialSha256, ignoreCase = true)) {
-                tmpFile.delete()
+                stagingFile.delete()
                 return Result.failure(
                     workDataOf(KEY_ERROR to "Integrity check failed: SHA-256 mismatch (expected ${model.officialSha256}, got $computedHash).")
                 )
             }
 
-            // 5. Atomic installation using same-filesystem rename only
-            val renameSuccess = tmpFile.renameTo(destFile)
+            // 5. Atomic installation using same-filesystem rename with backup rollback
+            val backupFile = if (destFile.exists()) File(destFile.parent, "${destFile.name}.backup_${System.currentTimeMillis()}") else null
+            if (backupFile != null) {
+                destFile.renameTo(backupFile)
+            }
+
+            val renameSuccess = stagingFile.renameTo(destFile)
             if (!renameSuccess) {
-                tmpFile.delete()
+                stagingFile.delete()
+                backupFile?.renameTo(destFile) // Rollback to previous working model
                 return Result.failure(workDataOf(KEY_ERROR to "Atomic model installation failed. Active model preserved."))
             }
 
+            backupFile?.delete() // Cleanup backup only after successful replacement
             Result.success()
         } catch (e: Exception) {
-            tmpFile.delete()
+            stagingFile.delete()
             Result.failure(workDataOf(KEY_ERROR to (e.message ?: "Download failed")))
         }
     }
