@@ -39,6 +39,7 @@ class ContinuousVoiceManager @Inject constructor(
     private val vad: VoiceActivityDetector = LocalVoiceActivityDetector(silenceThresholdMs = 900L)
 
     private var activeTurnJob: Job? = null
+    private var interruptionAudioRecordJob: Job? = null
     var onSpeechSubmitted: ((String) -> Unit)? = null
 
     init {
@@ -92,24 +93,6 @@ class ContinuousVoiceManager @Inject constructor(
         )
     }
 
-    fun pauseSession() {
-        ttsEngine.stop()
-        speechRecognitionEngine.stopListening()
-        activeTurnJob?.cancel()
-        vad.reset()
-        _voiceState.value = ContinuousVoiceState.PAUSED
-        Log.d(TAG, "Paused continuous voice session")
-    }
-
-    fun stopSession() {
-        ttsEngine.stop()
-        speechRecognitionEngine.stopListening()
-        activeTurnJob?.cancel()
-        vad.reset()
-        bluetoothHeadsetManager.stopHeadsetAudioRoute()
-        _voiceState.value = ContinuousVoiceState.STANDBY
-        Log.d(TAG, "Stopped continuous voice session")
-    }
 
     /**
      * Process real-time microphone energy frame.
@@ -132,11 +115,11 @@ class ContinuousVoiceManager @Inject constructor(
         // 2. Continuous listening speech endpoint detection
         if (currentState == ContinuousVoiceState.LISTENING) {
             val endpointDetected = vad.processFrame(amplitude, isAiSpeaking = false)
-            if (endpointDetected) {
-                Log.d(TAG, "VAD speech endpoint reached! Transitioning to THINKING.")
+            if (endpointDetected && speechRecognitionEngine.isListening()) {
+                Log.d(TAG, "VAD speech endpoint reached! Finalizing speech recognition.")
                 _voiceState.value = ContinuousVoiceState.THINKING
-                // Automatically submit turn without button presses
-                onSpeechSubmitted?.invoke("")
+                // Finalize speech recognition to trigger onResults with actual text
+                speechRecognitionEngine.stopListening()
             }
         }
     }
@@ -151,6 +134,7 @@ class ContinuousVoiceManager @Inject constructor(
 
         activeTurnJob?.cancel()
         _voiceState.value = ContinuousVoiceState.SPEAKING
+        startInterruptionMonitor()
 
         ttsEngine.speak(
             text = text,
@@ -159,6 +143,7 @@ class ContinuousVoiceManager @Inject constructor(
             },
             onDone = {
                 Log.d(TAG, "TTS complete, automatically returning to LISTENING state.")
+                stopInterruptionMonitor()
                 onCompletion()
                 vad.reset()
                 // Seamless turn-taking: automatically resume listening after playback
@@ -169,12 +154,82 @@ class ContinuousVoiceManager @Inject constructor(
             },
             onError = { err ->
                 Log.e(TAG, "TTS error: $err, falling back to LISTENING")
+                stopInterruptionMonitor()
                 vad.reset()
                 if (_voiceState.value == ContinuousVoiceState.SPEAKING) {
                     _voiceState.value = ContinuousVoiceState.LISTENING
                 }
             }
         )
+    }
+
+    private fun startInterruptionMonitor() {
+        stopInterruptionMonitor()
+        // During speaking, launch coroutine monitoring microphone energy to trigger onAudioFrame
+        interruptionAudioRecordJob = scope.launch(Dispatchers.IO) {
+            try {
+                // Monitor microphone amplitude using AudioRecord if permission granted
+                val sampleRate = 16000
+                val channelConfig = android.media.AudioFormat.CHANNEL_IN_MONO
+                val audioFormat = android.media.AudioFormat.ENCODING_PCM_16BIT
+                val minBufSize = android.media.AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
+                if (minBufSize <= 0) return@launch
+
+                val audioRecord = android.media.AudioRecord(
+                    android.media.MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+                    sampleRate,
+                    channelConfig,
+                    audioFormat,
+                    minBufSize * 2
+                )
+
+                if (audioRecord.state == android.media.AudioRecord.STATE_INITIALIZED) {
+                    audioRecord.startRecording()
+                    val buffer = ShortArray(minBufSize)
+                    while (isActive && _voiceState.value == ContinuousVoiceState.SPEAKING) {
+                        val read = audioRecord.read(buffer, 0, buffer.size)
+                        if (read > 0) {
+                            var maxAmp = 0
+                            for (i in 0 until read) {
+                                val absVal = java.lang.Math.abs(buffer[i].toInt())
+                                if (absVal > maxAmp) maxAmp = absVal
+                            }
+                            onAudioFrame(maxAmp)
+                        }
+                    }
+                    audioRecord.stop()
+                    audioRecord.release()
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Interruption audio monitor exception: ${e.message}")
+            }
+        }
+    }
+
+    private fun stopInterruptionMonitor() {
+        interruptionAudioRecordJob?.cancel()
+        interruptionAudioRecordJob = null
+    }
+
+    fun pauseSession() {
+        ttsEngine.stop()
+        stopInterruptionMonitor()
+        speechRecognitionEngine.stopListening()
+        activeTurnJob?.cancel()
+        vad.reset()
+        _voiceState.value = ContinuousVoiceState.PAUSED
+        Log.d(TAG, "Paused continuous voice session")
+    }
+
+    fun stopSession() {
+        ttsEngine.stop()
+        stopInterruptionMonitor()
+        speechRecognitionEngine.stopListening()
+        activeTurnJob?.cancel()
+        vad.reset()
+        bluetoothHeadsetManager.stopHeadsetAudioRoute()
+        _voiceState.value = ContinuousVoiceState.STANDBY
+        Log.d(TAG, "Stopped continuous voice session")
     }
 
     fun release() {

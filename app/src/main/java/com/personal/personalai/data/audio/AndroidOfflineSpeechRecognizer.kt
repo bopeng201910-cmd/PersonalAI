@@ -37,11 +37,21 @@ class AndroidOfflineSpeechRecognizer @Inject constructor(
     ) {
         mainScope.launch {
             try {
+                // Explicit on-device speech recognizer binding
                 if (speechRecognizer == null) {
-                    if (SpeechRecognizer.isRecognitionAvailable(context)) {
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                        if (SpeechRecognizer.isOnDeviceRecognitionAvailable(context)) {
+                            speechRecognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+                        } else {
+                            Log.e(TAG, "On-device speech recognition is NOT available on this device!")
+                            onError("On-device speech recognition model is not installed. Cloud fallback is blocked.")
+                            return@launch
+                        }
+                    } else if (SpeechRecognizer.isRecognitionAvailable(context)) {
                         speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context)
                     } else {
-                        onError("Speech recognition not available on device")
+                        Log.e(TAG, "SpeechRecognizer is NOT available on this device!")
+                        onError("On-device speech recognition is unavailable on this device. Cloud fallback is blocked.")
                         return@launch
                     }
                 }
