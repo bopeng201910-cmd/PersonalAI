@@ -53,7 +53,8 @@ data class ModelCenterUiState(
 @HiltViewModel
 class ModelCenterViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val dataStore: DataStore<Preferences>
+    private val dataStore: DataStore<Preferences>,
+    private val localLlmDataSource: com.personal.personalai.data.datasource.ai.LocalLlmDataSource? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ModelCenterUiState())
@@ -113,12 +114,23 @@ class ModelCenterViewModel @Inject constructor(
                 return@launch
             }
 
-            dataStore.edit { it[PreferencesKeys.LOCAL_MODEL] = model.modelId }
-            _uiState.update {
-                it.copy(
-                    activeModelId = model.modelId,
-                    infoMessage = "Active AI model switched to ${model.displayName}"
-                )
+            updateModel(model) { it.copy(status = ModelStatus.LOADING) }
+
+            val loadResult = localLlmDataSource?.activateModel(model) ?: Result.success(Unit)
+            loadResult.onSuccess {
+                dataStore.edit { it[PreferencesKeys.LOCAL_MODEL] = model.modelId }
+                _uiState.update {
+                    it.copy(
+                        activeModelId = model.modelId,
+                        infoMessage = "Active AI model switched to ${model.displayName}"
+                    )
+                }
+                loadModelStatuses()
+            }.onFailure { err ->
+                updateModel(model) { it.copy(status = ModelStatus.LOAD_FAILED, error = err.message) }
+                _uiState.update {
+                    it.copy(error = "Model activation failed: ${err.message}. Cloud fallback blocked.")
+                }
             }
         }
     }

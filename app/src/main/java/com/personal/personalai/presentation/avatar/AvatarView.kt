@@ -42,7 +42,6 @@ fun AvatarView(
             .background(MaterialTheme.colorScheme.surfaceVariant),
         contentAlignment = Alignment.Center
     ) {
-        val primaryColor = MaterialTheme.colorScheme.primary
         val outlineColor = MaterialTheme.colorScheme.outline
         val skinColor = Color(0xFFFFDAB9)
         val eyeColor = Color(0xFF2B2B2B)

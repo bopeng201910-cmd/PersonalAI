@@ -40,8 +40,8 @@ class LiteRtLlmEngine(private val context: Context) {
 
     companion object {
         private const val TAG = "LiteRtLlmEngine"
-        /** Minimum Android API level required by LiteRT-LM GPU backend. */
-        const val MIN_API_LEVEL = Build.VERSION_CODES.S  // API 31 = Android 12
+        /** Minimum Android API level required by Lumio Alpha 1.0. */
+        const val MIN_API_LEVEL = 36  // Android 16
 
         private const val TOP_K       = 64
         private const val TOP_P       = 0.95
@@ -67,6 +67,23 @@ class LiteRtLlmEngine(private val context: Context) {
     fun isSupported(): Boolean = Build.VERSION.SDK_INT >= MIN_API_LEVEL
 
     /**
+     * Initializes and loads [modelPath] into the engine runtime, confirming health.
+     */
+    @Synchronized
+    fun initModel(modelPath: String): Result<Unit> {
+        if (!isSupported()) {
+            return Result.failure(Exception("On-device AI requires Android 16 (API 36+) for Lumio Alpha 1.0."))
+        }
+        return try {
+            ensureEngine(modelPath)
+            if (engine != null) Result.success(Unit)
+            else Result.failure(Exception("Failed to initialize LiteRT engine for $modelPath"))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
      * Generates a response for the [messages] conversation.
      *
      * Tool schemas are passed separately in [tools]. When the model returns a structured
@@ -90,7 +107,7 @@ class LiteRtLlmEngine(private val context: Context) {
     ): LocalLlmResponse {
         if (!isSupported()) {
             return LocalLlmResponse.Error(
-                "On-device AI requires Android 12 (API 31) or higher. " +
+                "On-device AI requires Android 16 (API 36+). " +
                 "Your device is running API ${Build.VERSION.SDK_INT}."
             )
         }

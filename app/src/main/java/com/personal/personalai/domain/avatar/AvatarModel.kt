@@ -26,6 +26,7 @@ enum class Viseme {
  */
 data class AvatarState(
     val avatarId: String = "default_avatar",
+    val photoUri: String? = null,    // Local user-imported photo URI
     val isSpeaking: Boolean = false,
     val currentViseme: Viseme = Viseme.SILENCE,
     val mouthOpenAmount: Float = 0f, // 0.0 to 1.0

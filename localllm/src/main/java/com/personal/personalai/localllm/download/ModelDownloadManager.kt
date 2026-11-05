@@ -39,10 +39,11 @@ object ModelDownloadManager {
     fun modelFile(context: Context, model: LocalModel): File =
         File(context.getExternalFilesDir("models"), model.fileName)
 
-    /** Returns true if the model file exists on disk with a non-zero size. */
+    /** Returns true if the model file exists on disk with verified installation manifest. */
     fun isDownloaded(context: Context, model: LocalModel): Boolean {
         val file = modelFile(context, model)
-        return file.exists() && file.length() > 0L
+        val manifest = File(file.parent, "${file.name}.verified_manifest")
+        return file.exists() && file.length() > 0L && manifest.exists()
     }
 
     /**

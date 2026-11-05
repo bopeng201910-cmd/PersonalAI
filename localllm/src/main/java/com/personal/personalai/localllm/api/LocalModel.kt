@@ -18,6 +18,8 @@ enum class LocalModel(
     val estimatedRamBytes: Long,
     val supportedLanguages: List<String>,
     val minRamGb: Int = 12,
+    /** Pinned immutable git commit revision on HuggingFace. */
+    val pinnedRevision: String? = null,
     /** Official SHA-256 checksum where available from upstream repository. Null if unverified. */
     val officialSha256: String? = null
 ) {
@@ -33,7 +35,8 @@ enum class LocalModel(
         estimatedRamBytes    = 3_500_000_000L,
         supportedLanguages   = listOf("en", "zh", "es", "fr", "de"),
         minRamGb             = 12,
-        officialSha256       = null // Unverified community weight until official release
+        pinnedRevision       = "6b78abd019e61a1ca4cbe3b212d2c9ce8ff38a94",
+        officialSha256       = "181938105e0eefd105961417e8da75903eacda102c4fce9ce90f50b97139a63c"
     ),
     GEMMA_4_E4B(
         modelId              = "gemma-4-E4B-it",
@@ -46,6 +49,7 @@ enum class LocalModel(
         estimatedRamBytes    = 5_200_000_000L,
         supportedLanguages   = listOf("en", "zh", "es", "fr", "de"),
         minRamGb             = 12,
+        pinnedRevision       = null,
         officialSha256       = null
     ),
 
@@ -61,6 +65,7 @@ enum class LocalModel(
         estimatedRamBytes    = 2_800_000_000L,
         supportedLanguages   = listOf("zh", "en", "ja", "ko", "ru"),
         minRamGb             = 12,
+        pinnedRevision       = null,
         officialSha256       = null
     ),
     QWEN_2_5_3B(
@@ -74,6 +79,7 @@ enum class LocalModel(
         estimatedRamBytes    = 4_500_000_000L,
         supportedLanguages   = listOf("zh", "en", "ja", "ko", "es"),
         minRamGb             = 12,
+        pinnedRevision       = null,
         officialSha256       = null
     );
 

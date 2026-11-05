@@ -52,8 +52,15 @@ class ModelDownloadWorkerTest {
     @Test
     fun testUnverifiedModel_rejectsInstallationWithoutTrustedChecksum() {
         // Models without officialSha256 must be rejected to prevent installing unverified community artifacts
-        val model = LocalModel.GEMMA_4_E2B
+        val model = LocalModel.GEMMA_4_E4B
         assertTrue("Unverified models without trusted checksum cannot be installed in production", model.officialSha256.isNullOrBlank())
+    }
+
+    @Test
+    fun testVerifiedModel_hasPinnedRevisionAndTrustedChecksum() {
+        val model = LocalModel.GEMMA_4_E2B
+        assertEquals("6b78abd019e61a1ca4cbe3b212d2c9ce8ff38a94", model.pinnedRevision)
+        assertEquals("181938105e0eefd105961417e8da75903eacda102c4fce9ce90f50b97139a63c", model.officialSha256)
     }
 
     @Test
