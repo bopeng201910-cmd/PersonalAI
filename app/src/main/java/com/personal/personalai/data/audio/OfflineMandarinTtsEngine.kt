@@ -32,11 +32,32 @@ class OfflineMandarinTtsEngine @Inject constructor(
     private fun initializeTts() {
         tts = TextToSpeech(context) { status ->
             if (status == TextToSpeech.SUCCESS) {
-                val result = tts?.setLanguage(Locale.SIMPLIFIED_CHINESE)
+                val engine = tts
+                val result = engine?.setLanguage(Locale.SIMPLIFIED_CHINESE)
                 if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
                     Log.w(TAG, "Mandarin simplified data missing, falling back to Chinese general")
-                    tts?.setLanguage(Locale.CHINESE)
+                    engine?.setLanguage(Locale.CHINESE)
                 }
+
+                // Explicit verification that selected voice does not require network connection
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                    val currentVoice = engine?.voice
+                    if (currentVoice != null && currentVoice.isNetworkConnectionRequired) {
+                        Log.e(TAG, "Selected TTS voice requires network connection! Rejecting cloud voice.")
+                        // Find an offline voice if available
+                        val offlineVoice = engine.voices?.firstOrNull {
+                            (it.locale == Locale.SIMPLIFIED_CHINESE || it.locale == Locale.CHINESE) &&
+                            !it.isNetworkConnectionRequired
+                        }
+                        if (offlineVoice != null) {
+                            engine.voice = offlineVoice
+                            Log.d(TAG, "Selected offline Mandarin voice: ${offlineVoice.name}")
+                        } else {
+                            Log.w(TAG, "No strictly offline Mandarin voice found in TTS engine.")
+                        }
+                    }
+                }
+
                 isInitialized.set(true)
                 Log.d(TAG, "Offline Mandarin TTS initialized successfully")
             } else {
