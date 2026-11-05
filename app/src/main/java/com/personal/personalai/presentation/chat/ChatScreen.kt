@@ -18,6 +18,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.keyframes
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import com.personal.personalai.presentation.avatar.AvatarView
 import com.personal.personalai.presentation.common.MarkdownText
 import androidx.compose.foundation.background
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -46,9 +47,13 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.StopCircle
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -210,12 +215,39 @@ fun ChatScreen(
         Scaffold(
             topBar = {
                 TopAppBar(
-                    title = { Text(stringResource(R.string.chat_title)) },
+                    navigationIcon = {
+                        IconButton(onClick = { viewModel.toggleHistoryDrawer() }) {
+                            Icon(Icons.Default.History, contentDescription = "Conversation History")
+                        }
+                    },
+                    title = {
+                        Column {
+                            Text(uiState.activeConversationTitle, maxLines = 1)
+                            if (uiState.isContinuousModeActive) {
+                                Text(
+                                    text = "Hands-free: ${uiState.continuousVoiceState.name}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    },
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = MaterialTheme.colorScheme.primaryContainer,
                         titleContentColor = MaterialTheme.colorScheme.onPrimaryContainer
                     ),
                     actions = {
+                        // Bluetooth connection badge & continuous hands-free toggle
+                        IconButton(onClick = { viewModel.toggleContinuousMode() }) {
+                            Icon(
+                                Icons.Default.Mic,
+                                contentDescription = "Bluetooth Hands-Free",
+                                tint = if (uiState.isContinuousModeActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                            )
+                        }
+                        IconButton(onClick = { viewModel.startNewConversation() }) {
+                            Icon(Icons.Default.Add, contentDescription = "New Conversation")
+                        }
                         IconButton(onClick = onNavigateToSettings) {
                             Icon(Icons.Default.Settings, contentDescription = stringResource(R.string.settings_icon_description))
                         }
@@ -228,6 +260,60 @@ fun ChatScreen(
                     .fillMaxSize()
                     .padding(scaffoldPadding)
             ) {
+                // Batch 4: 2.2D Realistic Avatar & Mode Selection Bar
+                if (uiState.isContinuousModeActive) {
+                    AvatarView(
+                        avatarState = uiState.avatarState,
+                        modifier = Modifier
+                            .padding(horizontal = 16.dp, vertical = 8.dp)
+                            .fillMaxWidth()
+                    )
+
+                    // Photo picker launcher for local avatar portrait customization
+                    val photoPickerLauncher = rememberLauncherForActivityResult(
+                        contract = ActivityResultContracts.PickVisualMedia()
+                    ) { uri ->
+                        uri?.let { viewModel.onAvatarPhotoSelected(it.toString()) }
+                    }
+
+                    // Three selectable conversation modes & local photo import button
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        androidx.compose.material3.OutlinedIconButton(
+                            onClick = {
+                                photoPickerLauncher.launch(
+                                    androidx.activity.result.PickVisualMediaRequest(
+                                        ActivityResultContracts.PickVisualMedia.ImageOnly
+                                    )
+                                )
+                            },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = "Import Avatar Photo", modifier = Modifier.size(16.dp))
+                        }
+
+                        com.personal.personalai.domain.audio.ConversationMode.entries.forEach { mode ->
+                            val isSelected = uiState.conversationMode == mode
+                            val label = when (mode) {
+                                com.personal.personalai.domain.audio.ConversationMode.NATURAL_CONVERSATION -> "Natural"
+                                com.personal.personalai.domain.audio.ConversationMode.ACTIVE_INTERACTION -> "Active"
+                                com.personal.personalai.domain.audio.ConversationMode.FULL_LISTENING -> "Listening"
+                            }
+                            androidx.compose.material3.FilterChip(
+                                selected = isSelected,
+                                onClick = { viewModel.setConversationMode(mode) },
+                                label = { Text(label, style = MaterialTheme.typography.labelSmall) },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                }
+
                 if (uiState.messages.isEmpty() && !uiState.isLoading) {
                     WelcomePlaceholder(modifier = Modifier.weight(1f))
                 } else {
@@ -318,10 +404,90 @@ fun ChatScreen(
                     }
                 }
 
+                if (uiState.isHistoryDrawerOpen) {
+                    androidx.compose.material3.ModalBottomSheet(
+                        onDismissRequest = { viewModel.toggleHistoryDrawer(false) }
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Conversations", style = MaterialTheme.typography.titleLarge)
+                                androidx.compose.material3.TextButton(
+                                    onClick = { viewModel.startNewConversation() }
+                                ) {
+                                    Icon(Icons.Default.Add, contentDescription = null)
+                                    Spacer(Modifier.size(4.dp))
+                                    Text("New")
+                                }
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            LazyColumn(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(300.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                items(uiState.conversations, key = { it.id }) { conv ->
+                                    val isSelected = conv.id == uiState.activeConversationId
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = if (isSelected) MaterialTheme.colorScheme.secondaryContainer
+                                        else MaterialTheme.colorScheme.surfaceVariant,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .pointerInput(conv.id) {
+                                                // Handle clicks
+                                            },
+                                        onClick = { viewModel.openConversation(conv.id) }
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(12.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    conv.title,
+                                                    style = MaterialTheme.typography.bodyLarge,
+                                                    maxLines = 1
+                                                )
+                                                Text(
+                                                    formatTimestamp(conv.updatedAt),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.outline
+                                                )
+                                            }
+                                            if (conv.id != "default") {
+                                                IconButton(onClick = { viewModel.deleteConversation(conv.id) }) {
+                                                    Icon(
+                                                        Icons.Default.Delete,
+                                                        contentDescription = "Delete conversation",
+                                                        tint = MaterialTheme.colorScheme.error
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 MessageInputBar(
                     text = uiState.inputText,
                     onTextChanged = viewModel::onInputChanged,
                     onSend = viewModel::sendMessage,
+                    onStop = viewModel::cancelCurrentMessage,
                     voiceState = uiState.voiceState,
                     onRecordPress = {
                         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
@@ -501,6 +667,7 @@ private fun MessageInputBar(
     text: String,
     onTextChanged: (String) -> Unit,
     onSend: () -> Unit,
+    onStop: () -> Unit = {},
     voiceState: VoiceState,
     onRecordPress: () -> Unit,
     onRecordRelease: () -> Unit,
@@ -603,17 +770,28 @@ private fun MessageInputBar(
                 }
             }
 
-            IconButton(
-                onClick = onSend,
-                enabled = text.isNotBlank() && !isLoading
-            ) {
-                Icon(
-                    Icons.AutoMirrored.Filled.Send,
-                    contentDescription = stringResource(R.string.send_description),
-                    tint = if (text.isNotBlank() && !isLoading)
-                        MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.outline
-                )
+            if (isLoading) {
+                IconButton(onClick = onStop) {
+                    Icon(
+                        Icons.Default.StopCircle,
+                        contentDescription = "Stop response",
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
+            } else {
+                IconButton(
+                    onClick = onSend,
+                    enabled = text.isNotBlank()
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.Send,
+                        contentDescription = stringResource(R.string.send_description),
+                        tint = if (text.isNotBlank())
+                            MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.outline
+                    )
+                }
             }
         }
     }

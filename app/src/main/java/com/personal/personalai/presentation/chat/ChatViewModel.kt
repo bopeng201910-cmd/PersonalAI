@@ -10,15 +10,22 @@ import com.personal.personalai.domain.tools.PermissionBroker
 import com.personal.personalai.domain.tools.UserInputBroker
 import com.personal.personalai.domain.usecase.AgentLoopUseCase
 import com.personal.personalai.domain.usecase.AgentStep
+import com.personal.personalai.domain.repository.CandidateMemoryRepository
+import com.personal.personalai.domain.repository.ConversationRepository
+import com.personal.personalai.domain.usecase.ExtractCandidateMemoriesUseCase
 import com.personal.personalai.domain.usecase.GetChatHistoryUseCase
 import com.personal.personalai.domain.usecase.TranscribeAudioUseCase
+import com.personal.personalai.domain.repository.ChatRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.util.UUID
 import javax.inject.Inject
 
 @HiltViewModel
@@ -29,25 +36,227 @@ class ChatViewModel @Inject constructor(
     private val audioRecorder: AudioRecorder,
     private val userInputBroker: UserInputBroker,
     private val permissionBroker: PermissionBroker,
-    @ApplicationContext private val context: Context
+    private val candidateMemoryRepository: CandidateMemoryRepository,
+    private val extractCandidateMemoriesUseCase: ExtractCandidateMemoriesUseCase,
+    private val conversationRepository: ConversationRepository,
+    private val chatRepository: ChatRepository,
+    @ApplicationContext private val context: Context,
+    private val continuousVoiceManager: com.personal.personalai.data.audio.ContinuousVoiceManager? = null,
+    private val bluetoothHeadsetManager: com.personal.personalai.domain.audio.BluetoothHeadsetManager? = null,
+    private val lipSyncEngine: com.personal.personalai.data.avatar.SpeechLipSyncEngine? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
 
+    private var currentMessageJob: Job? = null
+    internal var memoryReviewJob: Job? = null
+        private set
+    internal var currentTranscriptionJob: Job? = null
+        private set
+    private var transcriptionRequestId = 0L
+    private var messagesObservationJob: Job? = null
+    private var conversationSwitchRequestId = 0L
+
     init {
-        observeMessages()
+        observeConversations()
+        observeMessagesForActiveConversation("default")
         observeUserInputRequests()
         observePermissionRequests()
+        observePendingReviewCount()
+        checkNewMessagesForMemoryReview()
+        observeContinuousVoice()
+        observeAvatarLipSync()
     }
 
-    private fun observeMessages() {
-        viewModelScope.launch {
-            getChatHistoryUseCase().collect { messages ->
-                _uiState.update { it.copy(messages = messages) }
+    private fun observeAvatarLipSync() {
+        lipSyncEngine?.let { engine ->
+            viewModelScope.launch {
+                engine.avatarState.collect { state ->
+                    _uiState.update { it.copy(avatarState = state) }
+                }
             }
         }
     }
+
+    private fun observeContinuousVoice() {
+        bluetoothHeadsetManager?.let { bm ->
+            viewModelScope.launch {
+                bm.isHeadsetConnected.collect { connected ->
+                    _uiState.update { it.copy(isBluetoothConnected = connected) }
+                }
+            }
+        }
+        continuousVoiceManager?.let { cvm ->
+            cvm.onSpeechSubmitted = { recognizedText ->
+                if (recognizedText.isNotBlank()) {
+                    onInputChanged(recognizedText)
+                    sendMessage()
+                }
+            }
+            cvm.onUserInterruption = {
+                // When user interrupts playback, immediately cancel active message generation job as well
+                cancelCurrentMessage()
+            }
+            viewModelScope.launch {
+                cvm.voiceState.collect { state ->
+                    _uiState.update { it.copy(continuousVoiceState = state) }
+                    if (state == com.personal.personalai.domain.audio.ContinuousVoiceState.SPEAKING) {
+                        lipSyncEngine?.onSpeechStarted()
+                    } else {
+                        lipSyncEngine?.onSpeechCompleted()
+                    }
+                }
+            }
+            viewModelScope.launch {
+                cvm.conversationMode.collect { mode ->
+                    _uiState.update { it.copy(conversationMode = mode) }
+                }
+            }
+        }
+    }
+
+    fun toggleContinuousMode() {
+        val cvm = continuousVoiceManager ?: return
+        val current = _uiState.value.isContinuousModeActive
+        if (!current) {
+            _uiState.update { it.copy(isContinuousModeActive = true) }
+            cvm.startContinuousSession()
+        } else {
+            _uiState.update { it.copy(isContinuousModeActive = false) }
+            cvm.stopSession()
+        }
+    }
+
+    fun setConversationMode(mode: com.personal.personalai.domain.audio.ConversationMode) {
+        continuousVoiceManager?.setConversationMode(mode)
+    }
+
+    fun onAvatarPhotoSelected(uriString: String) {
+        _uiState.update { it.copy(avatarState = it.avatarState.copy(photoUri = uriString)) }
+    }
+
+    private fun observeConversations() {
+        viewModelScope.launch {
+            conversationRepository.getAllConversations().collect { convs ->
+                _uiState.update { state ->
+                    val activeExists = convs.any { it.id == state.activeConversationId }
+                    val activeTitle = convs.find { it.id == state.activeConversationId }?.title
+                        ?: state.activeConversationTitle
+                    state.copy(
+                        conversations = convs,
+                        activeConversationTitle = activeTitle
+                    )
+                }
+            }
+        }
+    }
+
+    private fun observeMessagesForActiveConversation(conversationId: String) {
+        messagesObservationJob?.cancel()
+        messagesObservationJob = viewModelScope.launch {
+            chatRepository.getMessagesByConversation(conversationId).collect { msgs ->
+                // Guard: only update UI if the observed conversation is still the active conversation
+                if (_uiState.value.activeConversationId == conversationId) {
+                    _uiState.update { it.copy(messages = msgs) }
+                }
+            }
+        }
+    }
+
+    fun openConversation(conversationId: String) {
+        ++conversationSwitchRequestId
+        cancelCurrentMessage()
+        _uiState.update {
+            it.copy(
+                activeConversationId = conversationId,
+                messages = emptyList(),
+                isHistoryDrawerOpen = false,
+                isLoading = false,
+                agentStatusMessage = null,
+                error = null
+            )
+        }
+        observeMessagesForActiveConversation(conversationId)
+    }
+
+    fun startNewConversation() {
+        val requestId = ++conversationSwitchRequestId
+        cancelCurrentMessage()
+        val newId = UUID.randomUUID().toString()
+        _uiState.update {
+            it.copy(
+                messages = emptyList(),
+                inputText = "",
+                isLoading = false,
+                agentStatusMessage = null,
+                error = null
+            )
+        }
+        viewModelScope.launch {
+            conversationRepository.createConversation(newId, "New Conversation")
+            if (requestId == conversationSwitchRequestId) {
+                _uiState.update {
+                    it.copy(
+                        activeConversationId = newId,
+                        activeConversationTitle = "New Conversation",
+                        messages = emptyList(),
+                        isHistoryDrawerOpen = false,
+                        inputText = "",
+                        isLoading = false,
+                        agentStatusMessage = null,
+                        error = null
+                    )
+                }
+                observeMessagesForActiveConversation(newId)
+            }
+        }
+    }
+
+    fun deleteConversation(conversationId: String) {
+        if (conversationId == "default") {
+            // Reserved default conversation is protected and cannot be deleted
+            return
+        }
+        val isDeletingActive = (_uiState.value.activeConversationId == conversationId)
+        val deletionSwitchId = conversationSwitchRequestId
+        if (isDeletingActive) {
+            cancelCurrentMessage()
+        }
+        viewModelScope.launch {
+            conversationRepository.deleteConversation(conversationId)
+            // Only navigate back to default if this deletion target was active AND no newer conversation selection was made
+            if (isDeletingActive && deletionSwitchId == conversationSwitchRequestId && _uiState.value.activeConversationId == conversationId) {
+                openConversation("default")
+            }
+        }
+    }
+
+    fun toggleHistoryDrawer(open: Boolean? = null) {
+        _uiState.update { it.copy(isHistoryDrawerOpen = open ?: !it.isHistoryDrawerOpen) }
+    }
+
+    private fun checkNewMessagesForMemoryReview() {
+        memoryReviewJob = viewModelScope.launch {
+            // Background scan for any new unreviewed messages upon app launch
+            try {
+                extractCandidateMemoriesUseCase()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Automatic launch memory review check failed: ${e.message}", e)
+            }
+        }
+    }
+
+    private fun observePendingReviewCount() {
+        viewModelScope.launch {
+            candidateMemoryRepository.getPendingCandidateMemories().collect { list ->
+                _uiState.update { it.copy(pendingReviewCount = list.size) }
+            }
+        }
+    }
+
 
     /** Listens for [AskUserTool] questions and surfaces them in the UI. */
     private fun observeUserInputRequests() {
@@ -101,32 +310,79 @@ class ChatViewModel @Inject constructor(
             return
         }
 
-        if (_uiState.value.isLoading) return
+        // Cancel any active message generation before starting a new one
+        currentMessageJob?.cancel()
 
-        _uiState.update { it.copy(inputText = "", isLoading = true, error = null) }
+        _uiState.update { it.copy(inputText = "", isLoading = true, agentStatusMessage = null, error = null) }
 
-        viewModelScope.launch {
-            agentLoopUseCase(text, backgroundMode = false).collect { step ->
-                when (step) {
-                    is AgentStep.ToolCalling ->
-                        _uiState.update { it.copy(agentStatusMessage = step.humanReadable) }
-                    is AgentStep.Complete -> {
-                        _uiState.update {
-                            it.copy(isLoading = false, agentStatusMessage = null)
+        val activeConvId = _uiState.value.activeConversationId
+
+        currentMessageJob = viewModelScope.launch {
+            try {
+                // If it's a new conversation, update title from first message
+                if (_uiState.value.messages.isEmpty() && activeConvId != "default") {
+                    val previewTitle = if (text.length > 25) text.take(25) + "…" else text
+                    conversationRepository.updateTitle(activeConvId, previewTitle)
+                }
+                conversationRepository.touchConversation(activeConvId)
+
+                agentLoopUseCase(text, backgroundMode = false, conversationId = activeConvId).collect { step ->
+                    when (step) {
+                        is AgentStep.ToolCalling ->
+                            _uiState.update { it.copy(agentStatusMessage = step.humanReadable) }
+                        is AgentStep.Complete -> {
+                            _uiState.update {
+                                it.copy(isLoading = false, agentStatusMessage = null)
+                            }
+                            step.result.onSuccess { responseText ->
+                                if (_uiState.value.isContinuousModeActive) {
+                                    continuousVoiceManager?.playAiResponse(responseText)
+                                }
+                            }.onFailure { e ->
+                                _uiState.update { it.copy(error = e.message) }
+                                if (_uiState.value.isContinuousModeActive) {
+                                    continuousVoiceManager?.onAiGenerationFinished(false)
+                                }
+                            }
                         }
-                        step.result.onFailure { e ->
-                            _uiState.update { it.copy(error = e.message) }
-                        }
+                    }
+                }
+            } catch (cancellation: CancellationException) {
+                // Reset loading and status on cancellation if this job is still the active job;
+                // do NOT surface an error message
+                if (currentMessageJob === coroutineContext[Job]) {
+                    _uiState.update {
+                        it.copy(isLoading = false, agentStatusMessage = null)
+                    }
+                }
+            } catch (e: Exception) {
+                if (currentMessageJob === coroutineContext[Job]) {
+                    _uiState.update {
+                        it.copy(isLoading = false, agentStatusMessage = null, error = e.message)
                     }
                 }
             }
         }
     }
 
+    /**
+     * Cancels the active AI response/agent execution.
+     * Safely resets loading and progress status without displaying an error message.
+     */
+    fun cancelCurrentMessage() {
+        currentMessageJob?.cancel()
+        currentMessageJob = null
+        _uiState.update {
+            it.copy(isLoading = false, agentStatusMessage = null)
+        }
+    }
+
     // ── Voice recording ──────────────────────────────────────────────────────
 
     fun onRecordStart() {
-        if (_uiState.value.voiceState != VoiceState.IDLE) return
+        if (_uiState.value.voiceState == VoiceState.RECORDING) return
+        // Cancel any active transcription before starting a new recording
+        cancelTranscription()
         try {
             audioRecorder.start()
             _uiState.update { it.copy(voiceState = VoiceState.RECORDING) }
@@ -142,24 +398,54 @@ class ChatViewModel @Inject constructor(
             _uiState.update { it.copy(voiceState = VoiceState.IDLE) }
             return
         }
+
+        // Cancel previous transcription before setting state and launching
+        currentTranscriptionJob?.cancel()
         _uiState.update { it.copy(voiceState = VoiceState.TRANSCRIBING) }
-        viewModelScope.launch {
-            transcribeAudioUseCase(file)
-                .onSuccess { text ->
-                    _uiState.update { it.copy(voiceState = VoiceState.IDLE, inputText = text) }
+
+        val activeRequestId = ++transcriptionRequestId
+
+        currentTranscriptionJob = viewModelScope.launch {
+            try {
+                val result = transcribeAudioUseCase(file)
+                if (activeRequestId == transcriptionRequestId) {
+                    result.onSuccess { text ->
+                        _uiState.update { it.copy(voiceState = VoiceState.IDLE, inputText = text) }
+                    }.onFailure { e ->
+                        Log.e(TAG, "Transcription failed: ${e.message}", e)
+                        _uiState.update { it.copy(voiceState = VoiceState.IDLE, error = e.message) }
+                    }
                 }
-                .onFailure { e ->
+            } catch (cancellation: CancellationException) {
+                if (activeRequestId == transcriptionRequestId) {
+                    _uiState.update { it.copy(voiceState = VoiceState.IDLE) }
+                }
+                throw cancellation
+            } catch (e: Exception) {
+                if (activeRequestId == transcriptionRequestId) {
                     Log.e(TAG, "Transcription failed: ${e.message}", e)
                     _uiState.update { it.copy(voiceState = VoiceState.IDLE, error = e.message) }
                 }
-            file.delete()
+            } finally {
+                file.delete()
+            }
         }
     }
 
     fun onRecordCancel() {
         if (_uiState.value.voiceState != VoiceState.RECORDING) return
         audioRecorder.stop()?.delete()
+        cancelTranscription()
         _uiState.update { it.copy(voiceState = VoiceState.IDLE) }
+    }
+
+    fun cancelTranscription() {
+        ++transcriptionRequestId
+        currentTranscriptionJob?.cancel()
+        currentTranscriptionJob = null
+        if (_uiState.value.voiceState == VoiceState.TRANSCRIBING) {
+            _uiState.update { it.copy(voiceState = VoiceState.IDLE) }
+        }
     }
 
     fun onMicPermissionDenied() {
@@ -172,6 +458,9 @@ class ChatViewModel @Inject constructor(
 
     override fun onCleared() {
         super.onCleared()
+        currentMessageJob?.cancel()
+        currentTranscriptionJob?.cancel()
+        memoryReviewJob?.cancel()
         audioRecorder.release()
     }
 

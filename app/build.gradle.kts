@@ -12,7 +12,7 @@ android {
 
     defaultConfig {
         applicationId = "com.personal.personalai"
-        minSdk = 28
+        minSdk = 36
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
@@ -38,6 +38,10 @@ android {
 
     kotlinOptions {
         jvmTarget = "11"
+    }
+
+    testOptions {
+        unitTests.isReturnDefaultValues = true
     }
 
     buildFeatures {
@@ -84,6 +88,8 @@ dependencies {
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
     ksp(libs.room.compiler)
+    testImplementation(libs.room.testing)
+    testImplementation(libs.sqlite.jdbc)
 
     // WorkManager + Hilt integration
     implementation(libs.work.runtime.ktx)
@@ -113,6 +119,7 @@ dependencies {
     // Unit Tests
     testImplementation(libs.junit)
     testImplementation(libs.mockk)
+    testImplementation("org.json:json:20240303")
     testImplementation(libs.kotlinx.coroutines.test)
 
     // Instrumented Tests

@@ -5,14 +5,21 @@ import androidx.room.PrimaryKey
 import com.personal.personalai.domain.model.Message
 import com.personal.personalai.domain.model.MessageRole
 
-@Entity(tableName = "messages")
+import androidx.room.ColumnInfo
+import androidx.room.Index
+
+@Entity(
+    tableName = "messages",
+    indices = [Index(value = ["conversationId"])]
+)
 data class MessageEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val content: String,
     val role: String,
     val timestamp: Long = System.currentTimeMillis(),
     val hasCreatedTask: Boolean = false,
-    val createdTaskTitle: String? = null
+    val createdTaskTitle: String? = null,
+    @ColumnInfo(defaultValue = "'default'") val conversationId: String = "default"
 )
 
 fun MessageEntity.toDomain() = Message(
@@ -21,7 +28,8 @@ fun MessageEntity.toDomain() = Message(
     role = MessageRole.valueOf(role),
     timestamp = timestamp,
     hasCreatedTask = hasCreatedTask,
-    createdTaskTitle = createdTaskTitle
+    createdTaskTitle = createdTaskTitle,
+    conversationId = conversationId
 )
 
 fun Message.toEntity() = MessageEntity(
@@ -30,5 +38,6 @@ fun Message.toEntity() = MessageEntity(
     role = role.name,
     timestamp = timestamp,
     hasCreatedTask = hasCreatedTask,
-    createdTaskTitle = createdTaskTitle
+    createdTaskTitle = createdTaskTitle,
+    conversationId = conversationId
 )

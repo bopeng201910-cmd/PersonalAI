@@ -75,8 +75,7 @@ class LocalLlmDataSource @Inject constructor(
         if (!engine.isSupported()) {
             return@withContext Result.success(
                 AgentResponse.Text(
-                    "On-device AI requires Android 12 (API 31) or higher. " +
-                    "Please use OpenAI or Ollama instead."
+                    "On-device AI requires Android 16 (API 36+) for Lumio Alpha 1.0. Cloud fallback is strictly blocked."
                 )
             )
         }
@@ -88,8 +87,8 @@ class LocalLlmDataSource @Inject constructor(
         if (!ModelDownloadManager.isDownloaded(context, model)) {
             return@withContext Result.success(
                 AgentResponse.Text(
-                    "Model \"${model.displayName}\" is not downloaded yet. " +
-                    "Please go to Settings → Local AI and tap Download."
+                    "Model \"${model.displayName}\" is not downloaded or verified yet. " +
+                    "Please open Model Center and tap Download & Install."
                 )
             )
         }
@@ -240,6 +239,16 @@ class LocalLlmDataSource @Inject constructor(
             }
             else -> raw.toString()
         }
+    }
+
+    suspend fun activateModel(model: LocalModel): Result<Unit> = withContext(Dispatchers.IO) {
+        if (!ModelDownloadManager.isDownloaded(context, model)) {
+            return@withContext Result.failure(
+                Exception("Model '${model.displayName}' is not installed or missing verification manifest.")
+            )
+        }
+        val path = ModelDownloadManager.modelFile(context, model).absolutePath
+        engine.initModel(path)
     }
 
     private fun buildSystemPrompt(memories: List<Memory>): String {

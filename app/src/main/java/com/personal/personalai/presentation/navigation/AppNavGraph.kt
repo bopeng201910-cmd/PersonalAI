@@ -105,7 +105,8 @@ fun AppNavGraph() {
             composable(Screen.Settings.route) {
                 SettingsScreen(
                     onNavigateBack = { navController.popBackStack() },
-                    onNavigateToApiUsage = { navController.navigate(Screen.ApiUsage.route) }
+                onNavigateToApiUsage = { navController.navigate(Screen.ApiUsage.route) },
+                onNavigateToModelCenter = { navController.navigate(Screen.ModelCenter.route) }
                 )
             }
             composable(Screen.ApiUsage.route) {
@@ -113,6 +114,12 @@ fun AppNavGraph() {
                     onNavigateBack = { navController.popBackStack() }
                 )
             }
+
+        composable(Screen.ModelCenter.route) {
+            com.personal.personalai.presentation.modelcenter.ModelCenterScreen(
+                onNavigateBack = { navController.popBackStack() }
+            )
+        }
         }
     }
 }

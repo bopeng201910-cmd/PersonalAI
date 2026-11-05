@@ -3,8 +3,12 @@ package com.personal.personalai.presentation.library
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.personal.personalai.domain.model.CandidateMemory
 import com.personal.personalai.domain.model.Memory
+import com.personal.personalai.domain.repository.CandidateMemoryRepository
 import com.personal.personalai.domain.repository.MemoryRepository
+import com.personal.personalai.domain.usecase.ExtractCandidateMemoriesUseCase
+import com.personal.personalai.domain.usecase.ReviewCandidateMemoryUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -28,17 +32,27 @@ data class FileEntry(
 data class LibraryUiState(
     val selectedTab: Int = 0,
     val files: List<FileEntry> = emptyList(),
+    val candidateMemories: List<CandidateMemory> = emptyList(),
     val memories: List<Memory> = emptyList(),
     val isLoadingFiles: Boolean = true,
+    val isLoadingCandidates: Boolean = true,
     val isLoadingMemories: Boolean = true,
+    val isExtracting: Boolean = false,
     val openedFile: Pair<String, String>? = null,
-    val error: String? = null
+    val editingCandidate: CandidateMemory? = null,
+    val exportedJson: String? = null,
+    val error: String? = null,
+    val infoMessage: String? = null
 )
 
 @HiltViewModel
 class LibraryViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val memoryRepository: MemoryRepository
+    private val memoryRepository: MemoryRepository,
+    private val candidateMemoryRepository: CandidateMemoryRepository,
+    private val extractCandidateMemoriesUseCase: ExtractCandidateMemoriesUseCase,
+    private val reviewCandidateMemoryUseCase: ReviewCandidateMemoryUseCase,
+    private val exportPersonalArchiveUseCase: com.personal.personalai.domain.usecase.ExportPersonalArchiveUseCase? = null
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(LibraryUiState())
@@ -51,6 +65,11 @@ class LibraryViewModel @Inject constructor(
         viewModelScope.launch {
             memoryRepository.getMemories().collect { memories ->
                 _uiState.update { it.copy(memories = memories, isLoadingMemories = false) }
+            }
+        }
+        viewModelScope.launch {
+            candidateMemoryRepository.getPendingCandidateMemories().collect { candidates ->
+                _uiState.update { it.copy(candidateMemories = candidates, isLoadingCandidates = false) }
             }
         }
     }
@@ -108,5 +127,105 @@ class LibraryViewModel @Inject constructor(
         viewModelScope.launch { memoryRepository.deleteMemory(memory) }
     }
 
+    fun triggerReviewExtraction() {
+        if (_uiState.value.isExtracting) return
+        _uiState.update { it.copy(isExtracting = true) }
+        viewModelScope.launch {
+            extractCandidateMemoriesUseCase()
+                .onSuccess { count ->
+                    _uiState.update {
+                        it.copy(
+                            isExtracting = false,
+                            infoMessage = if (count > 0) "Extracted $count new candidate memories"
+                                          else "No new long-term memories found in recent chats"
+                        )
+                    }
+                }
+                .onFailure { e ->
+                    _uiState.update {
+                        it.copy(
+                            isExtracting = false,
+                            error = "Review extraction failed: ${e.message}"
+                        )
+                    }
+                }
+        }
+    }
+
+    fun approveCandidate(candidate: CandidateMemory, customContent: String? = null, customTopic: String? = null) {
+        viewModelScope.launch {
+            val result = reviewCandidateMemoryUseCase.approveCandidate(candidate.id, customContent, customTopic)
+            if (result.isSuccess && result.getOrNull() == true) {
+                _uiState.update { it.copy(editingCandidate = null, infoMessage = "Memory approved and saved.") }
+            } else {
+                val errorMsg = result.exceptionOrNull()?.message ?: "Failed to save memory. Item may no longer be pending."
+                // Retain editingCandidate with user's customized content so edits are not lost, while surfacing error
+                val updatedCandidate = if (customContent != null || customTopic != null) {
+                    candidate.copy(
+                        content = customContent ?: candidate.content,
+                        topic = customTopic ?: candidate.topic
+                    )
+                } else {
+                    candidate
+                }
+                _uiState.update { it.copy(editingCandidate = updatedCandidate, error = errorMsg) }
+            }
+        }
+    }
+
+    fun approveCandidates(ids: List<Long>) {
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            val result = reviewCandidateMemoryUseCase.approveAll(ids)
+            if (result.failedCount > 0) {
+                _uiState.update {
+                    it.copy(
+                        infoMessage = "Saved ${result.succeededCount} memories. ${result.failedCount} failed.",
+                        error = if (result.succeededCount == 0) "Failed to save selected memories." else null
+                    )
+                }
+            } else {
+                _uiState.update { it.copy(infoMessage = "Successfully saved all ${result.succeededCount} memories.") }
+            }
+        }
+    }
+
+    fun approveAllCandidates() {
+        approveCandidates(_uiState.value.candidateMemories.map { it.id })
+    }
+
+    fun discardCandidate(candidate: CandidateMemory) {
+        viewModelScope.launch {
+            reviewCandidateMemoryUseCase.discardCandidate(candidate.id)
+            if (_uiState.value.editingCandidate?.id == candidate.id) {
+                _uiState.update { it.copy(editingCandidate = null) }
+            }
+        }
+    }
+
+    fun startEditingCandidate(candidate: CandidateMemory) {
+        _uiState.update { it.copy(editingCandidate = candidate) }
+    }
+
+    fun dismissEditingCandidate() {
+        _uiState.update { it.copy(editingCandidate = null) }
+    }
+
+    fun exportPersonalArchive() {
+        viewModelScope.launch {
+            try {
+                val json = exportPersonalArchiveUseCase?.invoke() ?: "{}"
+                _uiState.update { it.copy(exportedJson = json, infoMessage = "Personal archive exported successfully.") }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(error = "Export failed: ${e.message}") }
+            }
+        }
+    }
+
+    fun clearExportedJson() {
+        _uiState.update { it.copy(exportedJson = null) }
+    }
+
     fun dismissError() = _uiState.update { it.copy(error = null) }
+    fun dismissInfoMessage() = _uiState.update { it.copy(infoMessage = null) }
 }

@@ -32,8 +32,10 @@ class ModelDownloadWorker(
 
         private const val BUFFER_SIZE = 128 * 1024  // 128 KB
 
-        fun downloadUrl(repo: String, fileName: String) =
-            "https://huggingface.co/$repo/resolve/main/$fileName"
+        fun downloadUrl(repo: String, fileName: String, revision: String? = null): String {
+            val rev = revision ?: "main"
+            return "https://huggingface.co/$repo/resolve/$rev/$fileName"
+        }
     }
 
     override suspend fun doWork(): Result {
@@ -45,22 +47,93 @@ class ModelDownloadWorker(
             ?: return Result.failure(workDataOf(KEY_ERROR to "Unknown model ID: $modelId"))
 
         val destFile = ModelDownloadManager.modelFile(applicationContext, model)
-        val tmpFile  = File(destFile.parent, "${destFile.name}.tmp")
+        val stagingFile = File(destFile.parent, "${destFile.name}.download_${System.currentTimeMillis()}")
         destFile.parentFile?.mkdirs()
+
+        // 1. Production checksum requirement: Reject download if trusted checksum is missing
+        if (model.officialSha256.isNullOrBlank()) {
+            return Result.failure(
+                workDataOf(KEY_ERROR to "Production model '${model.modelId}' has no verified official SHA-256 checksum and cannot be installed.")
+            )
+        }
+
+        // 2. Storage validation: Ensure at least model size + 500MB safety buffer is available
+        val freeSpace = destFile.parentFile?.usableSpace ?: 0L
+        val requiredSpace = model.approximateSizeBytes + (500L * 1024L * 1024L)
+        if (freeSpace < requiredSpace) {
+            return Result.failure(
+                workDataOf(KEY_ERROR to "Insufficient storage space. Need at least ${(requiredSpace / (1024 * 1024))} MB.")
+            )
+        }
 
         return try {
             downloadFile(
-                urlStr        = downloadUrl(model.huggingFaceRepo, model.fileName),
+                urlStr        = downloadUrl(model.huggingFaceRepo, model.fileName, model.pinnedRevision),
                 hfToken       = hfToken,
-                dest          = tmpFile,
+                dest          = stagingFile,
                 expectedBytes = model.approximateSizeBytes
             )
-            tmpFile.renameTo(destFile)
+
+            if (isStopped) {
+                stagingFile.delete()
+                return Result.failure(workDataOf(KEY_ERROR to "Download cancelled by user or WorkManager."))
+            }
+
+            // 3. File size validation: Reject zero-byte or truncated downloads
+            val actualLength = stagingFile.length()
+            if (actualLength <= 0L) {
+                stagingFile.delete()
+                return Result.failure(workDataOf(KEY_ERROR to "Downloaded file is empty."))
+            }
+
+            // 4. SHA-256 Checksum validation against trusted checksum
+            val computedHash = computeSha256(stagingFile)
+            if (!computedHash.equals(model.officialSha256, ignoreCase = true)) {
+                stagingFile.delete()
+                return Result.failure(
+                    workDataOf(KEY_ERROR to "Integrity check failed: SHA-256 mismatch (expected ${model.officialSha256}, got $computedHash).")
+                )
+            }
+
+            // 5. Atomic installation using same-filesystem rename with backup rollback
+            val backupFile = if (destFile.exists()) File(destFile.parent, "${destFile.name}.backup_${System.currentTimeMillis()}") else null
+            if (backupFile != null) {
+                destFile.renameTo(backupFile)
+            }
+
+            val renameSuccess = stagingFile.renameTo(destFile)
+            if (!renameSuccess) {
+                stagingFile.delete()
+                backupFile?.renameTo(destFile) // Rollback to previous working model
+                return Result.failure(workDataOf(KEY_ERROR to "Atomic model installation failed. Active model preserved."))
+            }
+
+            backupFile?.delete() // Cleanup backup only after successful replacement
+
+            // Write verification marker/manifest
+            val manifestFile = File(destFile.parent, "${destFile.name}.verified_manifest")
+            manifestFile.writeText("sha256=${model.officialSha256}\nverified_at=${System.currentTimeMillis()}\n")
+
             Result.success()
+        } catch (cancellation: kotlinx.coroutines.CancellationException) {
+            stagingFile.delete()
+            throw cancellation
         } catch (e: Exception) {
-            tmpFile.delete()
+            stagingFile.delete()
             Result.failure(workDataOf(KEY_ERROR to (e.message ?: "Download failed")))
         }
+    }
+
+    private fun computeSha256(file: File): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        file.inputStream().buffered().use { input ->
+            val buf = ByteArray(BUFFER_SIZE)
+            var read: Int
+            while (input.read(buf).also { read = it } != -1) {
+                digest.update(buf, 0, read)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
     private suspend fun downloadFile(
@@ -83,34 +156,38 @@ class ModelDownloadWorker(
             throw Exception("HTTP ${conn.responseCode}: ${conn.responseMessage}")
         }
 
-        val totalBytes = if (conn.contentLengthLong > 0L) conn.contentLengthLong else expectedBytes
-        var downloaded = 0L
-        val buffer     = ByteArray(BUFFER_SIZE)
+        try {
+            val totalBytes = if (conn.contentLengthLong > 0L) conn.contentLengthLong else expectedBytes
+            var downloaded = 0L
+            val buffer     = ByteArray(BUFFER_SIZE)
 
-        conn.inputStream.use { input ->
-            dest.outputStream().buffered().use { output ->
-                var bytesRead: Int
-                while (input.read(buffer).also { bytesRead = it } != -1) {
-                    if (isStopped) {
-                        dest.delete()
-                        return
-                    }
-                    output.write(buffer, 0, bytesRead)
-                    downloaded += bytesRead
+            conn.inputStream.use { input ->
+                dest.outputStream().buffered().use { output ->
+                    var bytesRead: Int
+                    while (input.read(buffer).also { bytesRead = it } != -1) {
+                        if (isStopped) {
+                            dest.delete()
+                            return
+                        }
+                        output.write(buffer, 0, bytesRead)
+                        downloaded += bytesRead
 
-                    val percent = if (totalBytes > 0L) {
-                        ((downloaded * 100L) / totalBytes).toInt().coerceAtMost(99)
-                    } else 0
+                        val percent = if (totalBytes > 0L) {
+                            ((downloaded * 100L) / totalBytes).toInt().coerceAtMost(99)
+                        } else 0
 
-                    setProgress(
-                        workDataOf(
-                            PROGRESS_PERCENT   to percent,
-                            PROGRESS_BYTES_DL  to downloaded,
-                            PROGRESS_BYTES_TOT to totalBytes
+                        setProgress(
+                            workDataOf(
+                                PROGRESS_PERCENT   to percent,
+                                PROGRESS_BYTES_DL  to downloaded,
+                                PROGRESS_BYTES_TOT to totalBytes
+                            )
                         )
-                    )
+                    }
                 }
             }
+        } finally {
+            conn.disconnect()
         }
     }
 }

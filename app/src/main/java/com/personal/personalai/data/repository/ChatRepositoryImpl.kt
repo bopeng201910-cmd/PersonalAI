@@ -21,8 +21,15 @@ class ChatRepositoryImpl @Inject constructor(
     override fun getMessages(): Flow<List<Message>> =
         messageDao.getAllMessages().map { entities -> entities.map { it.toDomain() } }
 
+    override fun getMessagesByConversation(conversationId: String): Flow<List<Message>> =
+        messageDao.getMessagesByConversation(conversationId).map { entities -> entities.map { it.toDomain() } }
+
     override suspend fun saveMessage(message: Message): Long =
         messageDao.insertMessage(message.toEntity())
+
+    override suspend fun deleteConversationMessages(conversationId: String) {
+        messageDao.deleteMessagesByConversation(conversationId)
+    }
 
     override suspend fun clearHistory() {
         messageDao.clearAll()
