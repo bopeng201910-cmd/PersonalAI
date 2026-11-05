@@ -54,7 +54,7 @@ data class ModelCenterUiState(
 class ModelCenterViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val dataStore: DataStore<Preferences>,
-    private val localLlmDataSource: com.personal.personalai.data.datasource.ai.LocalLlmDataSource? = null
+    private val localLlmDataSource: com.personal.personalai.data.datasource.ai.LocalLlmDataSource
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ModelCenterUiState())
@@ -116,7 +116,7 @@ class ModelCenterViewModel @Inject constructor(
 
             updateModel(model) { it.copy(status = ModelStatus.LOADING) }
 
-            val loadResult = localLlmDataSource?.activateModel(model) ?: Result.success(Unit)
+            val loadResult = localLlmDataSource.activateModel(model)
             loadResult.onSuccess {
                 dataStore.edit { it[PreferencesKeys.LOCAL_MODEL] = model.modelId }
                 _uiState.update {

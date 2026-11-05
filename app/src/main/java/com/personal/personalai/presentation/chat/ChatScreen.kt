@@ -269,13 +269,34 @@ fun ChatScreen(
                             .fillMaxWidth()
                     )
 
-                    // Three selectable conversation modes
+                    // Photo picker launcher for local avatar portrait customization
+                    val photoPickerLauncher = rememberLauncherForActivityResult(
+                        contract = ActivityResultContracts.PickVisualMedia()
+                    ) { uri ->
+                        uri?.let { viewModel.onAvatarPhotoSelected(it.toString()) }
+                    }
+
+                    // Three selectable conversation modes & local photo import button
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 16.dp, vertical = 4.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
+                        androidx.compose.material3.OutlinedIconButton(
+                            onClick = {
+                                photoPickerLauncher.launch(
+                                    androidx.activity.result.PickVisualMediaRequest(
+                                        ActivityResultContracts.PickVisualMedia.ImageOnly
+                                    )
+                                )
+                            },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(Icons.Default.Add, contentDescription = "Import Avatar Photo", modifier = Modifier.size(16.dp))
+                        }
+
                         com.personal.personalai.domain.audio.ConversationMode.entries.forEach { mode ->
                             val isSelected = uiState.conversationMode == mode
                             val label = when (mode) {

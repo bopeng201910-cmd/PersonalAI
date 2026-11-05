@@ -28,6 +28,7 @@ class ModelCenterViewModelTest {
 
     private val context = mockk<Context>(relaxed = true)
     private val dataStore = mockk<DataStore<Preferences>>(relaxed = true)
+    private val localLlmDataSource = mockk<com.personal.personalai.data.datasource.ai.LocalLlmDataSource>(relaxed = true)
     private val testDispatcher = StandardTestDispatcher()
 
     @Before
@@ -47,7 +48,7 @@ class ModelCenterViewModelTest {
 
     @Test
     fun testActiveModelDeletionProtection_blocksRemovingActiveModel() = runTest(testDispatcher) {
-        val viewModel = ModelCenterViewModel(context, dataStore)
+        val viewModel = ModelCenterViewModel(context, dataStore, localLlmDataSource)
         testScheduler.advanceUntilIdle()
 
         // Attempt to delete currently active model GEMMA_4_E2B

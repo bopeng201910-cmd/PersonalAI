@@ -31,7 +31,28 @@ The repository follows Clean Architecture principles partitioned across two Grad
    - DataStore-backed schedule calculation for morning/evening check-in occurrences respecting quiet hours.
    - Disabling cancels pending WorkManager tasks; `BootReceiver` restores scheduling only when enabled.
 
-## 4. Build & Test Instructions
+## 4. Feature Status Classification
+
+Features are categorized into four explicit statuses:
+
+1. **IMPLEMENTED & AUTOMATED-TESTED:**
+   - Strict local-only AI routing via `LumioAiRouter` and `LocalLlmDataSource` (blocking cloud AI, OOM fail-closed, zero remote fallback).
+   - Multi-session conversation Room database with migrations (version 9) and evidence-grounded personal memory.
+   - Proactive interaction scheduling with WorkManager, quiet-hour handling, cancel-on-disable, and enabled-only boot recovery.
+   - Model Center runtime activation with non-null `LocalLlmDataSource`, verified manifest integrity checks, and active model deletion protection.
+   - Model download transactional safety: unique timestamped staging files, official SHA-256 validation, and atomic backup rollback.
+   - Pinned immutable revision (`6b78abd019e61a1ca4cbe3b212d2c9ce8ff38a94`) and verified checksum configured for Gemma E2B; unverified models (Qwen, Gemma E4B) remain gated from installation until upstream release checksums are published.
+   - Device capability evaluator enforcing Android 16 (API 36+), 12GB RAM physical baseline, low-memory pressure suspension, and 4.5GB minimum storage requirement.
+   - Fail-closed offline Mandarin TTS (verifying `Voice.isNetworkConnectionRequired == false`) and fail-closed on-device speech recognition (supporting `zh-CN` and `en-US`).
+   - Single-owner microphone state machine with sustained voice interruption (`>= 3` frames `>= 8.5 dB`) and PAUSED state recording release.
+   - 2.2D avatar rendering foundation (854x480 at 24 FPS) with local photo import picker (`photoUri`) and phonetic visemes.
+
+2. **DEVICE-VERIFIED / PENDING PHYSICAL HARDWARE:**
+   - Physical device testing on HONOR 500 (Android 16 / MagicOS 10 / 12GB RAM) has **NOT BEEN RUN** in this cloud development environment.
+   - Real Bluetooth SCO headset hardware audio routing, hardware acoustic echo cancellation, and radio-frequency reconnection have **NOT BEEN RUN** in this cloud development environment and require physical device acceptance before formal release.
+   - English offline TTS voice pack presence and language-pack installation on the user's phone have **NOT BEEN RUN** on physical hardware.
+
+## 5. Build & Test Instructions
 
 ```bash
 # Run all unit tests

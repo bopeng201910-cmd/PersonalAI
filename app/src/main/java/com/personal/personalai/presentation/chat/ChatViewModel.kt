@@ -132,6 +132,10 @@ class ChatViewModel @Inject constructor(
         continuousVoiceManager?.setConversationMode(mode)
     }
 
+    fun onAvatarPhotoSelected(uriString: String) {
+        _uiState.update { it.copy(avatarState = it.avatarState.copy(photoUri = uriString)) }
+    }
+
     private fun observeConversations() {
         viewModelScope.launch {
             conversationRepository.getAllConversations().collect { convs ->

@@ -43,7 +43,16 @@ object ModelDownloadManager {
     fun isDownloaded(context: Context, model: LocalModel): Boolean {
         val file = modelFile(context, model)
         val manifest = File(file.parent, "${file.name}.verified_manifest")
-        return file.exists() && file.length() > 0L && manifest.exists()
+        if (!file.exists() || file.length() <= 0L || !manifest.exists()) return false
+
+        // Validate manifest content matches trusted catalog
+        val manifestContent = runCatching { manifest.readText() }.getOrNull() ?: return false
+        val expectedSha = model.officialSha256
+        return if (!expectedSha.isNullOrBlank()) {
+            manifestContent.contains("sha256=$expectedSha")
+        } else {
+            false
+        }
     }
 
     /**
@@ -75,9 +84,11 @@ object ModelDownloadManager {
         WorkManager.getInstance(context).cancelUniqueWork(workTag(model))
     }
 
-    /** Deletes the on-disk model file for [model]. */
+    /** Deletes the on-disk model file and associated verification manifest for [model]. */
     fun deleteModel(context: Context, model: LocalModel) {
-        modelFile(context, model).delete()
+        val file = modelFile(context, model)
+        file.delete()
+        File(file.parent, "${file.name}.verified_manifest").delete()
     }
 
     /**
