@@ -32,10 +32,12 @@ class ProactiveCheckInWorkerTest {
     private val generateProactiveUseCase: GenerateProactiveConversationUseCase = mockk(relaxed = true)
     private val chatRepository: ChatRepository = mockk(relaxed = true)
 
+    private lateinit var mockWorkManager: androidx.work.WorkManager
+
     @Before
     fun setUp() {
         mockkStatic(androidx.work.WorkManager::class)
-        val mockWorkManager = mockk<androidx.work.WorkManager>(relaxed = true)
+        mockWorkManager = mockk<androidx.work.WorkManager>(relaxed = true)
         every { androidx.work.WorkManager.getInstance(any()) } returns mockWorkManager
     }
 
@@ -52,7 +54,7 @@ class ProactiveCheckInWorkerTest {
     }
 
     @Test
-    fun testDoWork_whenDisabled_returnsSuccessWithoutRescheduling() = runTest {
+    fun testDoWork_whenDisabled_cancelsWorkAndReturnsSuccess() = runTest {
         val prefs = preferencesOf(PreferencesKeys.PROACTIVE_ENABLED to false)
         every { dataStore.data } returns flowOf(prefs)
 
@@ -66,6 +68,14 @@ class ProactiveCheckInWorkerTest {
 
         val result = worker.doWork()
         assertEquals(androidx.work.ListenableWorker.Result.success(), result)
+    }
+
+    @Test
+    fun testCancelCheckIn_cancelsUniqueWorkManagerTask() {
+        ProactiveCheckInWorker.cancelCheckIn(context)
+        io.mockk.verify(atLeast = 1) {
+            mockWorkManager.cancelUniqueWork(ProactiveCheckInWorker.WORK_NAME)
+        }
     }
 
     @Test

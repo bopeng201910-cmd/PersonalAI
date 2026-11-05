@@ -31,12 +31,23 @@ class AndroidOfflineSpeechRecognizer @Inject constructor(
     private val mainScope = CoroutineScope(Dispatchers.Main)
     private var currentLanguageTag: String = "zh-CN"
 
-    fun setLanguage(languageTag: String) {
-        currentLanguageTag = when (languageTag.lowercase()) {
-            "en", "en-us", "en_us" -> "en-US"
-            else -> "zh-CN"
+    fun setLanguage(languageTag: String): Boolean {
+        return when (languageTag.lowercase()) {
+            "en", "en-us", "en_us" -> {
+                currentLanguageTag = "en-US"
+                Log.d(TAG, "Set offline speech recognition language to: $currentLanguageTag")
+                true
+            }
+            "zh", "zh-cn", "zh_cn", "cmn-hans-cn" -> {
+                currentLanguageTag = "zh-CN"
+                Log.d(TAG, "Set offline speech recognition language to: $currentLanguageTag")
+                true
+            }
+            else -> {
+                Log.w(TAG, "Requested language '$languageTag' is not verified or supported for offline recognition")
+                false
+            }
         }
-        Log.d(TAG, "Set offline speech recognition language to: $currentLanguageTag")
     }
 
     override fun startListening(
@@ -57,10 +68,13 @@ class AndroidOfflineSpeechRecognizer @Inject constructor(
                     speechRecognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
                 }
 
-                val targetLocale = if (currentLanguageTag.startsWith("en", ignoreCase = true)) {
-                    Locale.US
-                } else {
-                    Locale.SIMPLIFIED_CHINESE
+                val targetLocale = when (currentLanguageTag.lowercase()) {
+                    "en-us" -> Locale.US
+                    "zh-cn" -> Locale.SIMPLIFIED_CHINESE
+                    else -> {
+                        onError("LOCAL_ASR_UNAVAILABLE: Offline recognition for '$currentLanguageTag' is not installed or verified. Cloud fallback is blocked.")
+                        return@launch
+                    }
                 }
 
                 val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {

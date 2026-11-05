@@ -31,11 +31,17 @@ object DeviceCapabilityEvaluator {
         val totalRamGb = totalRam.toDouble() / (1024.0 * 1024.0 * 1024.0)
         val isLowMemory = memInfo.lowMemory
 
-        val availableStorage = runCatching {
+        val storageResult = runCatching {
             val statFs = StatFs(context.filesDir.absolutePath)
             statFs.availableBlocksLong * statFs.blockSizeLong
-        }.getOrDefault(64L * 1024L * 1024L * 1024L) // Default 64GB available if StatFs mocked or unavailable
-        val availableStorageGb = availableStorage.toDouble() / (1024.0 * 1024.0 * 1024.0)
+        }
+
+        val availableStorage = storageResult.getOrNull()
+        val availableStorageGb = if (availableStorage != null) {
+            availableStorage.toDouble() / (1024.0 * 1024.0 * 1024.0)
+        } else {
+            -1.0 // Unknown / detection failed
+        }
 
         val apiLevel = Build.VERSION.SDK_INT
         val isApi36 = apiLevel >= 36
@@ -43,6 +49,12 @@ object DeviceCapabilityEvaluator {
         val is12GbBaseline = totalRamGb >= 10.5
 
         val (recommended, explanation) = when {
+            availableStorage == null || availableStorageGb < 0 -> {
+                Pair(
+                    null,
+                    "Storage detection failed or unknown. Local model recommendation disabled until storage availability is confirmed."
+                )
+            }
             !is12GbBaseline -> {
                 Pair(
                     null,
@@ -79,7 +91,7 @@ object DeviceCapabilityEvaluator {
             androidVersion = apiLevel,
             totalPhysicalRamBytes = totalRam,
             totalPhysicalRamGb = totalRamGb,
-            availableStorageBytes = availableStorage,
+            availableStorageBytes = availableStorage ?: -1L,
             availableStorageGb = availableStorageGb,
             isLowMemory = isLowMemory,
             isApi36Compliant = isApi36,

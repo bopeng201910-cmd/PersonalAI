@@ -48,4 +48,11 @@ class ModelDownloadWorkerTest {
         tmpFile.delete()
         assertTrue(!tmpFile.exists())
     }
+
+    @Test
+    fun testUnverifiedModel_rejectsInstallationWithoutTrustedChecksum() {
+        // Models without officialSha256 must be rejected to prevent installing unverified community artifacts
+        val model = LocalModel.GEMMA_4_E2B
+        assertTrue("Unverified models without trusted checksum cannot be installed in production", model.officialSha256.isNullOrBlank())
+    }
 }

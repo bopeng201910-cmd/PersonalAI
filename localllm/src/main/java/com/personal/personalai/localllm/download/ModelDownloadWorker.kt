@@ -48,7 +48,14 @@ class ModelDownloadWorker(
         val tmpFile  = File(destFile.parent, "${destFile.name}.tmp")
         destFile.parentFile?.mkdirs()
 
-        // 1. Storage validation: Ensure at least model size + 500MB safety buffer is available
+        // 1. Production checksum requirement: Reject download if trusted checksum is missing
+        if (model.officialSha256.isNullOrBlank()) {
+            return Result.failure(
+                workDataOf(KEY_ERROR to "Production model '${model.modelId}' has no verified official SHA-256 checksum and cannot be installed.")
+            )
+        }
+
+        // 2. Storage validation: Ensure at least model size + 500MB safety buffer is available
         val freeSpace = destFile.parentFile?.usableSpace ?: 0L
         val requiredSpace = model.approximateSizeBytes + (500L * 1024L * 1024L)
         if (freeSpace < requiredSpace) {
@@ -70,30 +77,27 @@ class ModelDownloadWorker(
                 return Result.failure(workDataOf(KEY_ERROR to "Download cancelled by user or WorkManager."))
             }
 
-            // 2. File size validation: Reject zero-byte or severely truncated downloads
+            // 3. File size validation: Reject zero-byte or truncated downloads
             val actualLength = tmpFile.length()
             if (actualLength <= 0L) {
                 tmpFile.delete()
                 return Result.failure(workDataOf(KEY_ERROR to "Downloaded file is empty."))
             }
 
-            // 3. SHA-256 Checksum validation if official checksum is specified
-            if (model.officialSha256 != null) {
-                val computedHash = computeSha256(tmpFile)
-                if (!computedHash.equals(model.officialSha256, ignoreCase = true)) {
-                    tmpFile.delete()
-                    return Result.failure(
-                        workDataOf(KEY_ERROR to "Integrity check failed: SHA-256 mismatch (expected ${model.officialSha256}, got $computedHash).")
-                    )
-                }
+            // 4. SHA-256 Checksum validation against trusted checksum
+            val computedHash = computeSha256(tmpFile)
+            if (!computedHash.equals(model.officialSha256, ignoreCase = true)) {
+                tmpFile.delete()
+                return Result.failure(
+                    workDataOf(KEY_ERROR to "Integrity check failed: SHA-256 mismatch (expected ${model.officialSha256}, got $computedHash).")
+                )
             }
 
-            // 4. Atomic installation with explicit boolean check
+            // 5. Atomic installation using same-filesystem rename only
             val renameSuccess = tmpFile.renameTo(destFile)
             if (!renameSuccess) {
-                // Fallback copy if moving across mount points
-                tmpFile.copyTo(destFile, overwrite = true)
                 tmpFile.delete()
+                return Result.failure(workDataOf(KEY_ERROR to "Atomic model installation failed. Active model preserved."))
             }
 
             Result.success()

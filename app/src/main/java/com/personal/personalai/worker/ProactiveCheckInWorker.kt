@@ -73,6 +73,12 @@ class ProactiveCheckInWorker @AssistedInject constructor(
                 androidx.work.ExistingWorkPolicy.REPLACE,
                 workRequest
             )
+            Log.d(TAG, "Scheduled next proactive check-in in $delayMinutes minutes")
+        }
+
+        fun cancelCheckIn(context: Context) {
+            androidx.work.WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME)
+            Log.d(TAG, "Cancelled proactive check-in work")
         }
     }
 
@@ -85,6 +91,7 @@ class ProactiveCheckInWorker @AssistedInject constructor(
         val quietEnd = prefs[com.personal.personalai.presentation.settings.PreferencesKeys.PROACTIVE_QUIET_END] ?: "07:00"
 
         if (!isEnabled) {
+            cancelCheckIn(context)
             return Result.success()
         }
 

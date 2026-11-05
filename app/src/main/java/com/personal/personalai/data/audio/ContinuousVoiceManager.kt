@@ -43,6 +43,9 @@ class ContinuousVoiceManager @Inject constructor(
     var onSpeechSubmitted: ((String) -> Unit)? = null
     var onUserInterruption: (() -> Unit)? = null
 
+    // Sustained speech counter to prevent false triggers from single acoustic spikes
+    private var consecutiveInterruptionFrames = 0
+
     init {
         updateVadThresholdForMode(_conversationMode.value)
     }
@@ -118,9 +121,21 @@ class ContinuousVoiceManager @Inject constructor(
         val isAiSpeaking = (currentState == ContinuousVoiceState.SPEAKING)
 
         // 1. Interruption handling: User speaking during AI TTS playback
-        if (isAiSpeaking && rmsdB >= 7.5f) {
-            handleUserInterruption()
+        // Requires sustained speech (>= 3 consecutive frames above calibrated 8.5 dB threshold)
+        // to reject speaker echo spikes and momentary ambient noise.
+        if (isAiSpeaking) {
+            if (rmsdB >= 8.5f) {
+                consecutiveInterruptionFrames++
+                if (consecutiveInterruptionFrames >= 3) {
+                    consecutiveInterruptionFrames = 0
+                    handleUserInterruption()
+                }
+            } else {
+                consecutiveInterruptionFrames = 0
+            }
             return
+        } else {
+            consecutiveInterruptionFrames = 0
         }
 
         // 2. Endpoint detection during LISTENING
@@ -158,6 +173,8 @@ class ContinuousVoiceManager @Inject constructor(
 
         activeTurnJob?.cancel()
         _voiceState.value = ContinuousVoiceState.SPEAKING
+        // Ensure speech recognition is stopped before interruption monitor starts
+        speechRecognitionEngine.stopListening()
         startInterruptionMonitor()
 
         ttsEngine.speak(

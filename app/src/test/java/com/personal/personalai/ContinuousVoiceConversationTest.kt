@@ -50,8 +50,10 @@ class ContinuousVoiceConversationTest {
         voiceManager.playAiResponse("Ni hao, this is Lumio speaking")
         assertEquals(ContinuousVoiceState.SPEAKING, voiceManager.voiceState.value)
 
-        // User speaks loudly during playback (dB >= 7.5 dB)
-        voiceManager.onDecibelRmsChanged(8.0f)
+        // Sustained user speech during playback (3 consecutive frames >= 8.5 dB)
+        voiceManager.onDecibelRmsChanged(9.0f)
+        voiceManager.onDecibelRmsChanged(9.0f)
+        voiceManager.onDecibelRmsChanged(9.0f)
 
         // Interruption should immediately stop TTS and return to LISTENING
         verify(atLeast = 1) { ttsEngine.stop() }

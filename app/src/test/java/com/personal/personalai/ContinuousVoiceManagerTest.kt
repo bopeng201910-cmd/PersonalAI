@@ -63,8 +63,13 @@ class ContinuousVoiceManagerTest {
             interruptionNotified = true
         }
 
-        // Simulate user speaking while AI is speaking (loud RMS level >= 7.5 dB)
-        manager.onDecibelRmsChanged(8.0f)
+        // Simulate single spike (e.g. echo glitch) - should NOT trigger interruption yet
+        manager.onDecibelRmsChanged(9.0f)
+        assertFalse(interruptionNotified)
+
+        // Simulate sustained user speaking (3 consecutive loud frames >= 8.5 dB)
+        manager.onDecibelRmsChanged(9.0f)
+        manager.onDecibelRmsChanged(9.0f)
 
         // Verifications
         assertTrue(interruptionNotified)
