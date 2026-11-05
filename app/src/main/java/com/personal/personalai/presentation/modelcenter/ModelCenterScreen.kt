@@ -98,7 +98,8 @@ fun ModelCenterScreen(
                             Text("• Android Version: API ${assess.androidVersion} (Android 16)")
                             Text("• Physical RAM: %.1f GB (12GB Baseline: %s)".format(assess.totalPhysicalRamGb, if (assess.is12GbRamBaselineMet) "Met" else "Under"))
                             Text("• Available Storage: %.1f GB".format(assess.availableStorageGb))
-                            Text("• Recommended Model: ${assess.recommendedModel.displayName}", color = MaterialTheme.colorScheme.primary)
+                            Text("• Recommended Model: ${assess.recommendedModel?.displayName ?: "None (Device below baseline)"}", color = MaterialTheme.colorScheme.primary)
+                            Text("• Status: ${assess.suitabilityExplanation}", style = MaterialTheme.typography.bodySmall)
                         } else {
                             Text("Evaluating device hardware capabilities…")
                         }

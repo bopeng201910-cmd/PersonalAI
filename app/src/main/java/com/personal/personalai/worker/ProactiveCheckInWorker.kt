@@ -99,6 +99,8 @@ class ProactiveCheckInWorker @AssistedInject constructor(
         val promptText = generateProactiveConversationUseCase(config, LocalTime.now())
         if (promptText.isNullOrBlank()) {
             Log.d(TAG, "Proactive check-in suppressed (disabled, quiet hours, or unprompted)")
+            // Reschedule next check-in window even if quiet hours or conditions suppressed this check-in!
+            scheduleNextCheckIn(context, morningTime, eveningTime)
             return Result.success()
         }
 

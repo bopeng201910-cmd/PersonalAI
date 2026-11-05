@@ -17,10 +17,12 @@ import java.time.LocalTime
 
 class ProactiveConversationTest {
 
+    private val router = mockk<com.personal.personalai.domain.router.LumioAiRouter>(relaxed = true)
+
     @Test
     fun `test disabled config produces no proactive conversation`() = runTest {
         val memoryRepo = mockk<MemoryRepository>()
-        val useCase = GenerateProactiveConversationUseCase(memoryRepo)
+        val useCase = GenerateProactiveConversationUseCase(memoryRepo, router)
 
         val config = ProactiveCheckInConfig(isEnabled = false)
         val result = useCase(config, LocalTime.of(9, 30))
@@ -31,7 +33,7 @@ class ProactiveConversationTest {
     @Test
     fun `test quiet hours prevent proactive conversation delivery`() = runTest {
         val memoryRepo = mockk<MemoryRepository>()
-        val useCase = GenerateProactiveConversationUseCase(memoryRepo)
+        val useCase = GenerateProactiveConversationUseCase(memoryRepo, router)
 
         val config = ProactiveCheckInConfig(
             isEnabled = true,
@@ -52,7 +54,7 @@ class ProactiveConversationTest {
         )
         coEvery { memoryRepo.getMemories() } returns flowOf(memories)
 
-        val useCase = GenerateProactiveConversationUseCase(memoryRepo)
+        val useCase = GenerateProactiveConversationUseCase(memoryRepo, router)
         val config = ProactiveCheckInConfig(isEnabled = true)
 
         val result = useCase(config, LocalTime.of(8, 30))

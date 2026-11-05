@@ -2,9 +2,20 @@ package com.personal.personalai.data.audio
 
 import com.personal.personalai.domain.audio.VoiceActivityDetector
 
+/**
+ * Playback-aware Voice Activity Detector for continuous conversation.
+ *
+ * Operates on decibel-scale RMS values (typically -2dB to 10+ dB from Android SpeechRecognizer)
+ * or linear PCM RMS energy values, avoiding arbitrary multiplication factors.
+ * Default silence threshold is configurable around 1200ms - 1500ms to preserve natural pauses.
+ */
 class LocalVoiceActivityDetector(
-    private var silenceThresholdMs: Long = 900L,
-    private val speechEnergyThreshold: Int = 1200
+    private var silenceThresholdMs: Long = 1350L,
+    /**
+     * Speech decibel RMS threshold above ambient noise floor.
+     * Android SpeechRecognizer.onRmsChanged delivers values in dB (generally -2.0 to 12.0+).
+     */
+    private val speechDbThreshold: Float = 3.5f
 ) : VoiceActivityDetector {
 
     private var speechDetectedInUtterance = false
@@ -12,13 +23,15 @@ class LocalVoiceActivityDetector(
     private var silenceStartMs = 0L
     private var currentlySpeaking = false
 
-    override fun processFrame(amplitude: Int, isAiSpeaking: Boolean): Boolean {
+    /**
+     * Process raw decibel RMS level reported by speech recognizer or audio pipeline.
+     */
+    fun processDbLevel(rmsdB: Float, isAiSpeaking: Boolean): Boolean {
         val now = System.currentTimeMillis()
+        // Echo prevention: raise detection threshold if AI TTS is playing
+        val threshold = if (isAiSpeaking) speechDbThreshold + 4.0f else speechDbThreshold
 
-        // Acoustic echo prevention: ignore low/moderate amplitude when AI is actively speaking
-        val effectiveThreshold = if (isAiSpeaking) speechEnergyThreshold * 3 else speechEnergyThreshold
-
-        if (amplitude > effectiveThreshold) {
+        if (rmsdB >= threshold) {
             currentlySpeaking = true
             if (!speechDetectedInUtterance) {
                 speechDetectedInUtterance = true
@@ -32,13 +45,22 @@ class LocalVoiceActivityDetector(
                 if (silenceStartMs == 0L) {
                     silenceStartMs = now
                 } else if (now - silenceStartMs >= silenceThresholdMs) {
-                    // Endpoint detected!
                     reset()
                     return true
                 }
             }
             return false
         }
+    }
+
+    override fun processFrame(amplitude: Int, isAiSpeaking: Boolean): Boolean {
+        // Fallback for linear PCM amplitude (e.g. 0..32767)
+        val normalizedDb = if (amplitude > 0) {
+            (20.0 * Math.log10(amplitude.toDouble() / 100.0)).toFloat()
+        } else {
+            0.0f
+        }
+        return processDbLevel(normalizedDb, isAiSpeaking)
     }
 
     override fun isUserSpeaking(): Boolean = currentlySpeaking
@@ -51,6 +73,7 @@ class LocalVoiceActivityDetector(
     }
 
     override fun setAdaptiveSilenceThreshold(millis: Long) {
-        silenceThresholdMs = millis.coerceIn(900L, 1800L)
+        // Range configured around 1000ms - 1800ms to accommodate natural pauses
+        silenceThresholdMs = millis.coerceIn(1000L, 2000L)
     }
 }

@@ -17,7 +17,9 @@ enum class LocalModel(
     val approximateSizeBytes: Long,
     val estimatedRamBytes: Long,
     val supportedLanguages: List<String>,
-    val minRamGb: Int = 12
+    val minRamGb: Int = 12,
+    /** Official SHA-256 checksum where available from upstream repository. Null if unverified. */
+    val officialSha256: String? = null
 ) {
     // ── Google Gemma Family ───────────────────────────────────────────────────
     GEMMA_4_E2B(
@@ -30,7 +32,8 @@ enum class LocalModel(
         approximateSizeBytes = 2_772_123_648L,
         estimatedRamBytes    = 3_500_000_000L,
         supportedLanguages   = listOf("en", "zh", "es", "fr", "de"),
-        minRamGb             = 12
+        minRamGb             = 12,
+        officialSha256       = null // Unverified community weight until official release
     ),
     GEMMA_4_E4B(
         modelId              = "gemma-4-E4B-it",
@@ -42,7 +45,8 @@ enum class LocalModel(
         approximateSizeBytes = 3_921_479_680L,
         estimatedRamBytes    = 5_200_000_000L,
         supportedLanguages   = listOf("en", "zh", "es", "fr", "de"),
-        minRamGb             = 12
+        minRamGb             = 12,
+        officialSha256       = null
     ),
 
     // ── Alibaba Qwen Family ───────────────────────────────────────────────────
@@ -56,7 +60,8 @@ enum class LocalModel(
         approximateSizeBytes = 1_850_000_000L,
         estimatedRamBytes    = 2_800_000_000L,
         supportedLanguages   = listOf("zh", "en", "ja", "ko", "ru"),
-        minRamGb             = 12
+        minRamGb             = 12,
+        officialSha256       = null
     ),
     QWEN_2_5_3B(
         modelId              = "qwen-2.5-3b-it",
@@ -68,7 +73,8 @@ enum class LocalModel(
         approximateSizeBytes = 3_250_000_000L,
         estimatedRamBytes    = 4_500_000_000L,
         supportedLanguages   = listOf("zh", "en", "ja", "ko", "es"),
-        minRamGb             = 12
+        minRamGb             = 12,
+        officialSha256       = null
     );
 
     companion object {

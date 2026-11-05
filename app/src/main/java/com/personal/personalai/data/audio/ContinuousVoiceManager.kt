@@ -36,10 +36,10 @@ class ContinuousVoiceManager @Inject constructor(
     private val _conversationMode = MutableStateFlow(ConversationMode.NATURAL_CONVERSATION)
     val conversationMode: StateFlow<ConversationMode> = _conversationMode.asStateFlow()
 
-    private val vad: VoiceActivityDetector = LocalVoiceActivityDetector(silenceThresholdMs = 900L)
+    private val vad: LocalVoiceActivityDetector = LocalVoiceActivityDetector(silenceThresholdMs = 1350L)
 
     private var activeTurnJob: Job? = null
-    private var interruptionAudioRecordJob: Job? = null
+    private var interruptionMonitorJob: Job? = null
     var onSpeechSubmitted: ((String) -> Unit)? = null
     var onUserInterruption: (() -> Unit)? = null
 
@@ -53,10 +53,11 @@ class ContinuousVoiceManager @Inject constructor(
     }
 
     private fun updateVadThresholdForMode(mode: ConversationMode) {
+        // Configurable silence endpoint duration: 1.2s - 1.5s baseline for natural pauses
         val thresholdMs = when (mode) {
-            ConversationMode.NATURAL_CONVERSATION -> 900L
-            ConversationMode.ACTIVE_INTERACTION -> 750L
-            ConversationMode.FULL_LISTENING -> 1500L
+            ConversationMode.NATURAL_CONVERSATION -> 1350L
+            ConversationMode.ACTIVE_INTERACTION -> 1100L
+            ConversationMode.FULL_LISTENING -> 1600L
         }
         vad.setAdaptiveSilenceThreshold(thresholdMs)
     }
@@ -89,8 +90,9 @@ class ContinuousVoiceManager @Inject constructor(
                     onSpeechSubmitted?.invoke(recognizedText)
                 } else {
                     Log.w(TAG, "Recognized empty text, re-arming listening.")
-                    _voiceState.value = ContinuousVoiceState.LISTENING
-                    startListeningForTurn()
+                    if (_voiceState.value == ContinuousVoiceState.LISTENING) {
+                        startListeningForTurn()
+                    }
                 }
             },
             onError = { err ->
@@ -102,43 +104,48 @@ class ContinuousVoiceManager @Inject constructor(
                 }
             },
             onRmsChanged = { rmsdB ->
-                // Convert rmsdB to approximate amplitude range (0 - 10000)
-                val amp = (rmsdB * 500f).toInt().coerceAtLeast(0)
-                onAudioFrame(amp)
+                onDecibelRmsChanged(rmsdB)
             }
         )
     }
 
-
     /**
-     * Process real-time microphone energy frame.
-     * Evaluates VAD endpointing when LISTENING, and user interruption when SPEAKING.
+     * Process real-time decibel RMS values from single microphone owner (SpeechRecognizer).
+     * Avoids concurrent AudioRecord microphone contention.
      */
-    fun onAudioFrame(amplitude: Int) {
+    fun onDecibelRmsChanged(rmsdB: Float) {
         val currentState = _voiceState.value
         val isAiSpeaking = (currentState == ContinuousVoiceState.SPEAKING)
 
-        // 1. Interruption check: User speaking while AI is playing TTS
-        if (isAiSpeaking && amplitude > 3000) {
-            Log.i(TAG, "User interruption detected! Halting TTS immediately.")
-            stopInterruptionMonitor()
-            ttsEngine.stop()
-            activeTurnJob?.cancel()
-            onUserInterruption?.invoke()
-            vad.reset()
-            _voiceState.value = ContinuousVoiceState.LISTENING
-            startListeningForTurn()
+        // 1. Interruption handling: User speaking during AI TTS playback
+        if (isAiSpeaking && rmsdB >= 7.5f) {
+            handleUserInterruption()
             return
         }
 
-        // 2. Continuous listening speech endpoint detection
+        // 2. Endpoint detection during LISTENING
         if (currentState == ContinuousVoiceState.LISTENING) {
-            val endpointDetected = vad.processFrame(amplitude, isAiSpeaking = false)
-            if (endpointDetected && speechRecognitionEngine.isListening()) {
-                Log.d(TAG, "VAD speech endpoint reached! Stopping recognition to trigger results.")
+            val endpointReached = vad.processDbLevel(rmsdB, isAiSpeaking = false)
+            if (endpointReached && speechRecognitionEngine.isListening()) {
+                Log.d(TAG, "VAD silence endpoint reached. Stopping recognition to generate result.")
                 speechRecognitionEngine.stopListening()
             }
         }
+    }
+
+    /**
+     * Immediate cancellation and interruption cleanup.
+     */
+    fun handleUserInterruption() {
+        Log.i(TAG, "User interruption detected! Halting TTS playback and invalidating previous response.")
+        stopInterruptionMonitor()
+        ttsEngine.stop()
+        activeTurnJob?.cancel()
+        activeTurnJob = null
+        onUserInterruption?.invoke()
+        vad.reset()
+        _voiceState.value = ContinuousVoiceState.LISTENING
+        startListeningForTurn()
     }
 
     /**
@@ -170,11 +177,12 @@ class ContinuousVoiceManager @Inject constructor(
                 }
             },
             onError = { err ->
-                Log.e(TAG, "TTS error: $err, falling back to LISTENING")
+                Log.e(TAG, "TTS error: $err, returning to LISTENING")
                 stopInterruptionMonitor()
                 vad.reset()
                 if (_voiceState.value == ContinuousVoiceState.SPEAKING) {
                     _voiceState.value = ContinuousVoiceState.LISTENING
+                    startListeningForTurn()
                 }
             }
         )
@@ -182,10 +190,10 @@ class ContinuousVoiceManager @Inject constructor(
 
     private fun startInterruptionMonitor() {
         stopInterruptionMonitor()
-        // During speaking, launch coroutine monitoring microphone energy to trigger onAudioFrame
-        interruptionAudioRecordJob = scope.launch(Dispatchers.IO) {
+        // During speaking, SpeechRecognizer is stopped. We monitor microphone PCM energy
+        // solely during playback to detect genuine user interruption.
+        interruptionMonitorJob = scope.launch(Dispatchers.IO) {
             try {
-                // Monitor microphone amplitude using AudioRecord if permission granted
                 val sampleRate = 16000
                 val channelConfig = android.media.AudioFormat.CHANNEL_IN_MONO
                 val audioFormat = android.media.AudioFormat.ENCODING_PCM_16BIT
@@ -207,12 +215,14 @@ class ContinuousVoiceManager @Inject constructor(
                         while (isActive && _voiceState.value == ContinuousVoiceState.SPEAKING) {
                             val read = audioRecord.read(buffer, 0, buffer.size)
                             if (read > 0) {
-                                var maxAmp = 0
+                                var sumSquares = 0.0
                                 for (i in 0 until read) {
-                                    val absVal = java.lang.Math.abs(buffer[i].toInt())
-                                    if (absVal > maxAmp) maxAmp = absVal
+                                    val sample = buffer[i].toDouble()
+                                    sumSquares += sample * sample
                                 }
-                                onAudioFrame(maxAmp)
+                                val rms = Math.sqrt(sumSquares / read)
+                                val rmsDb = if (rms > 0.0) (20.0 * Math.log10(rms / 100.0)).toFloat() else -100f
+                                onDecibelRmsChanged(rmsDb)
                             }
                         }
                     } finally {
@@ -231,8 +241,8 @@ class ContinuousVoiceManager @Inject constructor(
     }
 
     private fun stopInterruptionMonitor() {
-        interruptionAudioRecordJob?.cancel()
-        interruptionAudioRecordJob = null
+        interruptionMonitorJob?.cancel()
+        interruptionMonitorJob = null
     }
 
     fun pauseSession() {
@@ -240,9 +250,10 @@ class ContinuousVoiceManager @Inject constructor(
         stopInterruptionMonitor()
         speechRecognitionEngine.stopListening()
         activeTurnJob?.cancel()
+        activeTurnJob = null
         vad.reset()
         _voiceState.value = ContinuousVoiceState.PAUSED
-        Log.d(TAG, "Paused continuous voice session")
+        Log.d(TAG, "Paused continuous voice session - microphone completely stopped")
     }
 
     fun stopSession() {
@@ -250,6 +261,7 @@ class ContinuousVoiceManager @Inject constructor(
         stopInterruptionMonitor()
         speechRecognitionEngine.stopListening()
         activeTurnJob?.cancel()
+        activeTurnJob = null
         vad.reset()
         bluetoothHeadsetManager.stopHeadsetAudioRoute()
         _voiceState.value = ContinuousVoiceState.STANDBY

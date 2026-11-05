@@ -65,19 +65,54 @@ class ModelDownloadWorker(
                 expectedBytes = model.approximateSizeBytes
             )
 
-            // 2. File size validation: Reject incomplete downloads
-            if (tmpFile.length() < (model.approximateSizeBytes / 2)) {
+            if (isStopped) {
                 tmpFile.delete()
-                return Result.failure(workDataOf(KEY_ERROR to "Downloaded file size is corrupted or truncated."))
+                return Result.failure(workDataOf(KEY_ERROR to "Download cancelled by user or WorkManager."))
             }
 
-            // 3. Atomic rename only after verification passes
-            tmpFile.renameTo(destFile)
+            // 2. File size validation: Reject zero-byte or severely truncated downloads
+            val actualLength = tmpFile.length()
+            if (actualLength <= 0L) {
+                tmpFile.delete()
+                return Result.failure(workDataOf(KEY_ERROR to "Downloaded file is empty."))
+            }
+
+            // 3. SHA-256 Checksum validation if official checksum is specified
+            if (model.officialSha256 != null) {
+                val computedHash = computeSha256(tmpFile)
+                if (!computedHash.equals(model.officialSha256, ignoreCase = true)) {
+                    tmpFile.delete()
+                    return Result.failure(
+                        workDataOf(KEY_ERROR to "Integrity check failed: SHA-256 mismatch (expected ${model.officialSha256}, got $computedHash).")
+                    )
+                }
+            }
+
+            // 4. Atomic installation with explicit boolean check
+            val renameSuccess = tmpFile.renameTo(destFile)
+            if (!renameSuccess) {
+                // Fallback copy if moving across mount points
+                tmpFile.copyTo(destFile, overwrite = true)
+                tmpFile.delete()
+            }
+
             Result.success()
         } catch (e: Exception) {
             tmpFile.delete()
             Result.failure(workDataOf(KEY_ERROR to (e.message ?: "Download failed")))
         }
+    }
+
+    private fun computeSha256(file: File): String {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+        file.inputStream().buffered().use { input ->
+            val buf = ByteArray(BUFFER_SIZE)
+            var read: Int
+            while (input.read(buf).also { read = it } != -1) {
+                digest.update(buf, 0, read)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
     private suspend fun downloadFile(

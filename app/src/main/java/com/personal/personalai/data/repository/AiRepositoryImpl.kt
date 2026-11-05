@@ -44,7 +44,8 @@ class AiRepositoryImpl @Inject constructor(
 
     override suspend fun transcribeAudio(audioFile: File): Result<String> {
         // Alpha 1.0 STRICT LOCAL-ONLY POLICY:
-        // Cloud Whisper API calls are blocked to prevent audio uploads and cloud network traffic.
+        // Cloud Whisper API calls are blocked to strictly prevent user voice uploads to remote services.
+        // On-device speech recognition is provided strictly locally.
         return Result.failure(
             Exception("Voice transcription is disabled in Alpha 1.0 local-only mode.")
         )

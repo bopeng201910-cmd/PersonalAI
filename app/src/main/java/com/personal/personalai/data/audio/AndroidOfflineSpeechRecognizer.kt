@@ -29,6 +29,15 @@ class AndroidOfflineSpeechRecognizer @Inject constructor(
     private var speechRecognizer: SpeechRecognizer? = null
     private val listening = AtomicBoolean(false)
     private val mainScope = CoroutineScope(Dispatchers.Main)
+    private var currentLanguageTag: String = "zh-CN"
+
+    fun setLanguage(languageTag: String) {
+        currentLanguageTag = when (languageTag.lowercase()) {
+            "en", "en-us", "en_us" -> "en-US"
+            else -> "zh-CN"
+        }
+        Log.d(TAG, "Set offline speech recognition language to: $currentLanguageTag")
+    }
 
     override fun startListening(
         onResult: (String) -> Unit,
@@ -38,19 +47,25 @@ class AndroidOfflineSpeechRecognizer @Inject constructor(
         mainScope.launch {
             try {
                 // Explicit on-device speech recognizer binding (Android 16 / API 36 baseline)
+                if (!SpeechRecognizer.isOnDeviceRecognitionAvailable(context)) {
+                    Log.e(TAG, "On-device speech recognition is NOT available on this device.")
+                    onError("LOCAL_ASR_UNAVAILABLE: On-device speech recognition is not supported on this device. Cloud fallback is blocked.")
+                    return@launch
+                }
+
                 if (speechRecognizer == null) {
-                    if (SpeechRecognizer.isOnDeviceRecognitionAvailable(context)) {
-                        speechRecognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
-                    } else {
-                        Log.e(TAG, "On-device speech recognition is NOT available on this device!")
-                        onError("On-device speech recognition model is not installed. Cloud fallback is blocked.")
-                        return@launch
-                    }
+                    speechRecognizer = SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+                }
+
+                val targetLocale = if (currentLanguageTag.startsWith("en", ignoreCase = true)) {
+                    Locale.US
+                } else {
+                    Locale.SIMPLIFIED_CHINESE
                 }
 
                 val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                     putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.SIMPLIFIED_CHINESE.toString())
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, targetLocale.toLanguageTag())
                     putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
                     putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
                 }

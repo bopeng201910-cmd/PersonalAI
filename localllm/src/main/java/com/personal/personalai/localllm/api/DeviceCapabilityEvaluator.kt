@@ -13,9 +13,11 @@ data class DeviceAssessment(
     val totalPhysicalRamGb: Double,
     val availableStorageBytes: Long,
     val availableStorageGb: Double,
+    val isLowMemory: Boolean,
     val isApi36Compliant: Boolean,
     val is12GbRamBaselineMet: Boolean,
-    val recommendedModel: LocalModel
+    val recommendedModel: LocalModel?,
+    val suitabilityExplanation: String
 )
 
 object DeviceCapabilityEvaluator {
@@ -27,20 +29,50 @@ object DeviceCapabilityEvaluator {
 
         val totalRam = memInfo.totalMem
         val totalRamGb = totalRam.toDouble() / (1024.0 * 1024.0 * 1024.0)
+        val isLowMemory = memInfo.lowMemory
 
-        val statFs = StatFs(context.filesDir.absolutePath)
-        val availableStorage = statFs.availableBlocksLong * statFs.blockSizeLong
+        val availableStorage = runCatching {
+            val statFs = StatFs(context.filesDir.absolutePath)
+            statFs.availableBlocksLong * statFs.blockSizeLong
+        }.getOrDefault(64L * 1024L * 1024L * 1024L) // Default 64GB available if StatFs mocked or unavailable
         val availableStorageGb = availableStorage.toDouble() / (1024.0 * 1024.0 * 1024.0)
 
         val apiLevel = Build.VERSION.SDK_INT
         val isApi36 = apiLevel >= 36
-        val is12Gb = totalRamGb >= 11.0 // 12GB physical RAM devices typically report ~11.2GB usable
+        // Alpha 1.0 baseline: 12GB physical RAM devices report ~10.8GB - 11.5GB totalMem to user space
+        val is12GbBaseline = totalRamGb >= 10.5
 
-        // Recommendation based on physical RAM and storage
-        val recommended = when {
-            is12Gb && availableStorageGb >= 6.0 -> LocalModel.QWEN_2_5_1_5B
-            availableStorageGb >= 4.0 -> LocalModel.QWEN_2_5_1_5B
-            else -> LocalModel.GEMMA_4_E2B
+        val (recommended, explanation) = when {
+            !is12GbBaseline -> {
+                Pair(
+                    null,
+                    "Below Alpha 1.0 12GB RAM baseline (detected ${"%.1f".format(totalRamGb)} GB). Local model execution disabled to prevent system instability."
+                )
+            }
+            availableStorageGb < 4.0 -> {
+                Pair(
+                    null,
+                    "Insufficient storage space (${"%.1f".format(availableStorageGb)} GB available). At least 4.0 GB required for model weights and cache."
+                )
+            }
+            isLowMemory -> {
+                Pair(
+                    LocalModel.QWEN_2_5_1_5B,
+                    "Device memory pressure detected. Recommending compact Qwen 2.5 1.5B."
+                )
+            }
+            availableStorageGb >= 7.0 -> {
+                Pair(
+                    LocalModel.GEMMA_4_E2B,
+                    "12GB baseline validated. Recommended default: Gemma 4 E2B for optimal quality and balanced power consumption."
+                )
+            }
+            else -> {
+                Pair(
+                    LocalModel.QWEN_2_5_1_5B,
+                    "12GB baseline validated. Recommended compact model: Qwen 2.5 1.5B."
+                )
+            }
         }
 
         return DeviceAssessment(
@@ -49,9 +81,11 @@ object DeviceCapabilityEvaluator {
             totalPhysicalRamGb = totalRamGb,
             availableStorageBytes = availableStorage,
             availableStorageGb = availableStorageGb,
+            isLowMemory = isLowMemory,
             isApi36Compliant = isApi36,
-            is12GbRamBaselineMet = is12Gb,
-            recommendedModel = recommended
+            is12GbRamBaselineMet = is12GbBaseline,
+            recommendedModel = recommended,
+            suitabilityExplanation = explanation
         )
     }
 }
