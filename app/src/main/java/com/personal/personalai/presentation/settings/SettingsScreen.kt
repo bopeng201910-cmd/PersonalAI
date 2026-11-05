@@ -105,127 +105,13 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.titleMedium
                     )
 
-                    // Provider toggle
-                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                        SegmentedButton(
-                            selected = uiState.aiProvider == AiProvider.OPENAI,
-                            onClick  = { viewModel.setAiProvider(AiProvider.OPENAI) },
-                            shape    = SegmentedButtonDefaults.itemShape(index = 0, count = 3)
-                        ) { Text("OpenAI\n(Cloud)", textAlign = TextAlign.Center) }
+                    Text(
+                        "Alpha 1.0 strictly runs on-device local AI. Cloud OpenAI and remote Ollama inference are disabled.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
 
-                        SegmentedButton(
-                            selected = uiState.aiProvider == AiProvider.OLLAMA,
-                            onClick  = { viewModel.setAiProvider(AiProvider.OLLAMA) },
-                            shape    = SegmentedButtonDefaults.itemShape(index = 1, count = 3)
-                        ) { Text("Ollama\n(Dev)", textAlign = TextAlign.Center) }
-
-                        SegmentedButton(
-                            selected = uiState.aiProvider == AiProvider.LOCAL,
-                            onClick  = { viewModel.setAiProvider(AiProvider.LOCAL) },
-                            shape    = SegmentedButtonDefaults.itemShape(index = 2, count = 3)
-                        ) { Text("Local\n(Device)", textAlign = TextAlign.Center) }
-                    }
-
-                    // ── OpenAI tab content ────────────────────────────────────
-                    if (uiState.aiProvider == AiProvider.OPENAI) {
-                        Text(
-                            stringResource(R.string.ai_backend_description),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        OutlinedTextField(
-                            value             = uiState.apiKey,
-                            onValueChange     = viewModel::onApiKeyChanged,
-                            label             = { Text(stringResource(R.string.api_key_label)) },
-                            visualTransformation = PasswordVisualTransformation(),
-                            modifier          = Modifier.fillMaxWidth(),
-                            singleLine        = true
-                        )
-                        Row(
-                            modifier              = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.End,
-                            verticalAlignment     = Alignment.CenterVertically
-                        ) {
-                            if (uiState.savedSuccessfully) {
-                                Text(
-                                    stringResource(R.string.api_key_saved),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                Spacer(Modifier.width(8.dp))
-                            }
-                            Button(
-                                onClick = viewModel::saveApiKey,
-                                enabled = !uiState.isSaving
-                            ) {
-                                if (uiState.isSaving) {
-                                    CircularProgressIndicator(
-                                        modifier    = Modifier.size(16.dp),
-                                        strokeWidth = 2.dp
-                                    )
-                                } else {
-                                    Text(stringResource(R.string.save))
-                                }
-                            }
-                        }
-                    }
-
-                    // ── Local on-device tab content ───────────────────────────
-                    if (uiState.aiProvider == AiProvider.LOCAL) {
-                        LocalAiSection(uiState = uiState, viewModel = viewModel)
-                    }
-
-                    // ── Ollama Dev Mode tab content ───────────────────────────
-                    if (uiState.aiProvider == AiProvider.OLLAMA) {
-                        Text(
-                            stringResource(R.string.ollama_note),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        OutlinedTextField(
-                            value             = uiState.ollamaUrl,
-                            onValueChange     = viewModel::onOllamaUrlChanged,
-                            label             = { Text(stringResource(R.string.ollama_url_label)) },
-                            placeholder       = { Text("http://10.100.102.75:11434") },
-                            modifier          = Modifier.fillMaxWidth(),
-                            singleLine        = true
-                        )
-                        OutlinedTextField(
-                            value             = uiState.ollamaModel,
-                            onValueChange     = viewModel::onOllamaModelChanged,
-                            label             = { Text(stringResource(R.string.ollama_model_label)) },
-                            placeholder       = { Text("qwen3.5:4b") },
-                            modifier          = Modifier.fillMaxWidth(),
-                            singleLine        = true
-                        )
-                        Row(
-                            modifier              = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.End,
-                            verticalAlignment     = Alignment.CenterVertically
-                        ) {
-                            if (uiState.ollamaSavedSuccessfully) {
-                                Text(
-                                    stringResource(R.string.ollama_saved),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                Spacer(Modifier.width(8.dp))
-                            }
-                            Button(
-                                onClick = viewModel::saveOllamaSettings,
-                                enabled = !uiState.isOllamaSaving
-                            ) {
-                                if (uiState.isOllamaSaving) {
-                                    CircularProgressIndicator(
-                                        modifier    = Modifier.size(16.dp),
-                                        strokeWidth = 2.dp
-                                    )
-                                } else {
-                                    Text(stringResource(R.string.save))
-                                }
-                            }
-                        }
-                    }
+                    LocalAiSection(uiState = uiState, viewModel = viewModel)
                 }
             }
 

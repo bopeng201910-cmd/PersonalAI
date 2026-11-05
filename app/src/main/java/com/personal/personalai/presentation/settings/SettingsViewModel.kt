@@ -103,6 +103,13 @@ class SettingsViewModel @Inject constructor(
         viewModelScope.launch {
             dataStore.edit { it[PreferencesKeys.PROACTIVE_ENABLED] = enabled }
             _uiState.update { it.copy(isProactiveEnabled = enabled) }
+            if (enabled) {
+                com.personal.personalai.worker.ProactiveCheckInWorker.scheduleNextCheckIn(context)
+            } else {
+                androidx.work.WorkManager.getInstance(context).cancelUniqueWork(
+                    com.personal.personalai.worker.ProactiveCheckInWorker.WORK_NAME
+                )
+            }
         }
     }
 
@@ -121,6 +128,9 @@ class SettingsViewModel @Inject constructor(
                     proactiveQuietStart = quietStart,
                     proactiveQuietEnd = quietEnd
                 )
+            }
+            if (_uiState.value.isProactiveEnabled) {
+                com.personal.personalai.worker.ProactiveCheckInWorker.scheduleNextCheckIn(context)
             }
         }
     }

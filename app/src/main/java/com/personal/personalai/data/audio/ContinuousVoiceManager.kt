@@ -71,18 +71,33 @@ class ContinuousVoiceManager @Inject constructor(
         }
     }
 
+    fun onAiGenerationFinished(success: Boolean) {
+        if (_voiceState.value == ContinuousVoiceState.THINKING && !success) {
+            Log.w(TAG, "AI generation failed, restoring LISTENING state.")
+            _voiceState.value = ContinuousVoiceState.LISTENING
+            startListeningForTurn()
+        }
+    }
+
     private fun startListeningForTurn() {
         if (_voiceState.value != ContinuousVoiceState.LISTENING) return
         speechRecognitionEngine.startListening(
             onResult = { recognizedText ->
-                Log.d(TAG, "Recognized user speech: $recognizedText")
-                _voiceState.value = ContinuousVoiceState.THINKING
-                onSpeechSubmitted?.invoke(recognizedText)
+                if (recognizedText.isNotBlank()) {
+                    Log.d(TAG, "Recognized user speech: $recognizedText")
+                    _voiceState.value = ContinuousVoiceState.THINKING
+                    onSpeechSubmitted?.invoke(recognizedText)
+                } else {
+                    Log.w(TAG, "Recognized empty text, re-arming listening.")
+                    _voiceState.value = ContinuousVoiceState.LISTENING
+                    startListeningForTurn()
+                }
             },
             onError = { err ->
                 Log.w(TAG, "Speech recognition error or silence: $err")
-                // In continuous listening, automatically rearm listening if still in session
-                if (_voiceState.value == ContinuousVoiceState.LISTENING) {
+                // In continuous listening, re-arm listening if still active
+                if (_voiceState.value == ContinuousVoiceState.LISTENING || _voiceState.value == ContinuousVoiceState.THINKING) {
+                    _voiceState.value = ContinuousVoiceState.LISTENING
                     startListeningForTurn()
                 }
             },
@@ -120,9 +135,7 @@ class ContinuousVoiceManager @Inject constructor(
         if (currentState == ContinuousVoiceState.LISTENING) {
             val endpointDetected = vad.processFrame(amplitude, isAiSpeaking = false)
             if (endpointDetected && speechRecognitionEngine.isListening()) {
-                Log.d(TAG, "VAD speech endpoint reached! Finalizing speech recognition.")
-                _voiceState.value = ContinuousVoiceState.THINKING
-                // Finalize speech recognition to trigger onResults with actual text
+                Log.d(TAG, "VAD speech endpoint reached! Stopping recognition to trigger results.")
                 speechRecognitionEngine.stopListening()
             }
         }

@@ -40,24 +40,32 @@ class OfflineMandarinTtsEngine @Inject constructor(
                 }
 
                 // Explicit verification that selected voice does not require network connection (Android 16 baseline)
+                var validOfflineVoiceFound = false
                 val currentVoice = engine?.voice
-                if (currentVoice != null && currentVoice.isNetworkConnectionRequired) {
-                    Log.e(TAG, "Selected TTS voice requires network connection! Rejecting cloud voice.")
-                    // Find an offline voice if available
-                    val offlineVoice = engine.voices?.firstOrNull {
+                if (currentVoice != null && !currentVoice.isNetworkConnectionRequired) {
+                    validOfflineVoiceFound = true
+                } else {
+                    Log.w(TAG, "Default voice requires network or is null. Searching for offline voice...")
+                    val offlineVoice = engine?.voices?.firstOrNull {
                         (it.locale == Locale.SIMPLIFIED_CHINESE || it.locale == Locale.CHINESE) &&
                         !it.isNetworkConnectionRequired
                     }
                     if (offlineVoice != null) {
-                        engine.voice = offlineVoice
+                        engine?.voice = offlineVoice
+                        validOfflineVoiceFound = true
                         Log.d(TAG, "Selected offline Mandarin voice: ${offlineVoice.name}")
                     } else {
-                        Log.w(TAG, "No strictly offline Mandarin voice found in TTS engine.")
+                        Log.e(TAG, "No strictly offline Mandarin voice found in TTS engine! Failing closed.")
                     }
                 }
 
-                isInitialized.set(true)
-                Log.d(TAG, "Offline Mandarin TTS initialized successfully")
+                if (validOfflineVoiceFound) {
+                    isInitialized.set(true)
+                    Log.d(TAG, "Offline Mandarin TTS initialized successfully with verified offline voice")
+                } else {
+                    isInitialized.set(false)
+                    Log.e(TAG, "TTS initialization failed closed: no verified offline voice available")
+                }
             } else {
                 Log.e(TAG, "TTS Initialization failed: $status")
             }
@@ -72,7 +80,14 @@ class OfflineMandarinTtsEngine @Inject constructor(
     ) {
         val engine = tts
         if (engine == null || !isInitialized.get()) {
-            onError("TTS engine not initialized")
+            onError("LOCAL_TTS_UNAVAILABLE: No verified offline Mandarin voice is installed on this device.")
+            return
+        }
+
+        // Re-verify immediately prior to playback that voice has not flipped to cloud-required
+        val voice = engine.voice
+        if (voice != null && voice.isNetworkConnectionRequired) {
+            onError("LOCAL_TTS_UNAVAILABLE: Selected voice requires network connection. Cloud TTS is blocked.")
             return
         }
 

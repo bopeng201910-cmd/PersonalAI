@@ -28,14 +28,24 @@ class PersonalAIApplication : Application(), Configuration.Provider {
     }
 
     private fun createNotificationChannel() {
-        val channel = NotificationChannel(
+        val notificationManager = getSystemService(NotificationManager::class.java)
+
+        val taskChannel = NotificationChannel(
             TaskReminderWorker.CHANNEL_ID,
             "Task Reminders",
             NotificationManager.IMPORTANCE_HIGH
         ).apply {
             description = "Notifications for scheduled AI task reminders"
         }
-        val notificationManager = getSystemService(NotificationManager::class.java)
-        notificationManager.createNotificationChannel(channel)
+        notificationManager.createNotificationChannel(taskChannel)
+
+        val proactiveChannel = NotificationChannel(
+            com.personal.personalai.worker.ProactiveCheckInWorker.CHANNEL_ID,
+            "Lumio Check-In",
+            NotificationManager.IMPORTANCE_DEFAULT
+        ).apply {
+            description = "Notifications for proactive conversation check-ins"
+        }
+        notificationManager.createNotificationChannel(proactiveChannel)
     }
 }

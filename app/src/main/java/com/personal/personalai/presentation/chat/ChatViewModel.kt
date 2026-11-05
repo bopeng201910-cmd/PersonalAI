@@ -319,6 +319,9 @@ class ChatViewModel @Inject constructor(
                                 }
                             }.onFailure { e ->
                                 _uiState.update { it.copy(error = e.message) }
+                                if (_uiState.value.isContinuousModeActive) {
+                                    continuousVoiceManager?.onAiGenerationFinished(false)
+                                }
                             }
                         }
                     }

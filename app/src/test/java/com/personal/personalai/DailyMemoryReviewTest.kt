@@ -777,10 +777,9 @@ class DailyMemoryReviewTest {
                 if (res.isFailure) {
                     resultFailureReturned = true
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                cancellationPropagated = true
             } catch (e: Throwable) {
-                if (e is kotlinx.coroutines.CancellationException) {
-                    cancellationPropagated = true
-                }
                 throw e
             }
         }

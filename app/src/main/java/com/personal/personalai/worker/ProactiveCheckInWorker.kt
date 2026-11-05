@@ -35,14 +35,14 @@ class ProactiveCheckInWorker @AssistedInject constructor(
         const val KEY_QUIET_START = "quiet_start"
         const val KEY_QUIET_END = "quiet_end"
 
-        fun scheduleNextCheckIn(context: Context) {
-            val workRequest = androidx.work.PeriodicWorkRequestBuilder<ProactiveCheckInWorker>(
-                12, java.util.concurrent.TimeUnit.HOURS
-            ).build()
+        fun scheduleNextCheckIn(context: Context, initialDelayMinutes: Long = 0) {
+            val workRequest = androidx.work.OneTimeWorkRequestBuilder<ProactiveCheckInWorker>()
+                .setInitialDelay(initialDelayMinutes, java.util.concurrent.TimeUnit.MINUTES)
+                .build()
 
-            androidx.work.WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+            androidx.work.WorkManager.getInstance(context).enqueueUniqueWork(
                 WORK_NAME,
-                androidx.work.ExistingPeriodicWorkPolicy.KEEP,
+                androidx.work.ExistingWorkPolicy.REPLACE,
                 workRequest
             )
         }
